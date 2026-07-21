@@ -1,0 +1,26 @@
+[
+  {
+    "id": "G01",
+    "name": "Enterprise asset inventory contents and review frequency",
+    "question": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+    "expected_answer": "The inventory should include end-user devices, network devices, non-computing or IoT devices, and servers. It should record the static network address, hardware address, machine name, asset owner, department, and approval status. The inventory should be reviewed and updated bi-annually, or more frequently.",
+    "expected_page": 19,
+    "expected_safeguard": "1.1"
+  },
+  {
+    "id": "G02",
+    "name": "DHCP inventory update frequency",
+    "question": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+    "expected_answer": "DHCP logging should be used on all DHCP servers or IP address management tools to update the enterprise asset inventory. The logs should be reviewed and used weekly, or more frequently.",
+    "expected_page": 19,
+    "expected_safeguard": "1.4"
+  },
+  {
+    "id": "G03",
+    "name": "Secure data disposal",
+    "question": "What does CIS require when securely disposing of data?",
+    "expected_answer": "Data should be securely disposed of according to the enterprise data management process, using a disposal process and method appropriate to the sensitivity of the data.",
+    "expected_page": 25,
+    "expected_safeguard": "3.5"
+  }
+]

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "G01",
+    "question": "What information must the enterprise asset inventory contain, and how often should it be reviewed?",
+    "actual_answer": "The enterprise asset inventory must contain information such as end-user devices, network devices, non-computing/IoT devices, servers, and their respective details, including hardware addresses, machine names, and department affiliations. The inventory should be reviewed bi-annually, or more frequently, to ensure accuracy and up-to-date information.",
+    "expected_answer": "The inventory should include end-user devices, network devices, non-computing or IoT devices, and servers. It should record the static network address, hardware address, machine name, asset owner, department, and approval status. The inventory should be reviewed and updated bi-annually, or more frequently.",
+    "expected_page": 19,
+    "selected_page": 69,
+    "page_correct": false,
+    "expected_safeguard": "1.1",
+    "retrieval_context": [
+      "Page 69\nEstablish and maintain an accurate, detailed, and up-to-date inventory of all enterprise assets with the potential to store or process data, to include: end-user devices (including portable and mobile), network devices, non-computing/IoT devices, and servers. Ensure the inventory records the network address (if static), hardware address, machine name, enterprise asset owner, department for each asset, and whether the asset has been approved to connect to the network. For mobile end-user devices, MDM type tools can support this process, where appropriate. This inventory includes assets connected to the infrastructure physically, virtually, remotely, and those within cloud environments. Additionally, it includes assets that are regularly connected to the enterprise’s network infrastructure, even if they are not under control of the enterprise. Review and update the inventory of all enterprise assets bi-annually, or more frequently.",
+      "Page 18\nMaintaining a current and accurate view of enterprise assets is an ongoing and dynamic process. Even for enterprises, there is rarely a single source of truth, as enterprise assets are not always provisioned or installed by the IT department. The reality is that a variety of sources need to be “crowd-sourced” to determine a high- confidence count of enterprise assets. Enterprises can actively scan on a regular basis, sending a variety of different packet types to identify assets connected to the network. In addition to asset sources mentioned above for small enterprises, larger enterprises can collect data from cloud portals and logs from enterprise platforms such as: Active Directory (AD), Single Sign-On (SSO), Multi-Factor Authentication (MFA), Virtual Private Network (VPN), Intrusion Detection Systems (IDS) or Deep Packet Inspection (DPI), Mobile Device Management (MDM), and vulnerability scanning tools. Property inventory databases, purchase order tracking, and local inventory",
+      "Page 19\n1.5 Use a Passive Asset Discovery Tool\nUse a passive discovery tool to identify assets connected to the enterprise’s network. Review and use scans to update the enterprise’s asset inventory at least weekly, or more frequently."
+    ]
+  },
+  {
+    "id": "G02",
+    "question": "How should DHCP logging be used to maintain the enterprise asset inventory, and how often?",
+    "actual_answer": "The passage does not provide enough context to determine how often DHCP logging should be used to maintain the enterprise asset inventory. However, it suggests that reviewing and using logs on a regular basis (e.g., weekly) is recommended for updating the enterprise's asset inventory.",
+    "expected_answer": "DHCP logging should be used on all DHCP servers or IP address management tools to update the enterprise asset inventory. The logs should be reviewed and used weekly, or more frequently.",
+    "expected_page": 19,
+    "selected_page": 19,
+    "page_correct": true,
+    "expected_safeguard": "1.4",
+    "retrieval_context": [
+      "Page 19\nUse Dynamic Host Configuration Protocol (DHCP) Logging to Update Enterprise Asset Inventory\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update the enterprise’s asset inventory. Review and use logs to update the enterprise’s asset inventory weekly, or more frequently.",
+      "Page 69\nUse Dynamic Host Configuration Protocol (DHCP) Logging to Update Enterprise Asset Inventory Devices -Identify-\nUse DHCP logging on all DHCP servers or Internet Protocol (IP) address management tools to update the enterprise’s asset inventory. Review and use logs to update the enterprise’s asset inventory weekly, or more frequently.",
+      "Page 36\nFurthermore, all enterprise assets should be configured to create access control logs when a user attempts to access resources without the appropriate privileges. To evaluate whether such logging is in place, an enterprise should periodically scan through its logs and compare them with the enterprise asset inventory assembled as part of CIS Control 1, in order to ensure that each managed asset actively connected to the network is periodically generating logs."
+    ]
+  },
+  {
+    "id": "G03",
+    "question": "What does CIS require when securely disposing of data?",
+    "actual_answer": "The CIS requires that securely disposing of data be done as outlined in the enterprise's data management process, ensuring the disposal process and method are commensurate with the data sensitivity. (Page 25)",
+    "expected_answer": "Data should be securely disposed of according to the enterprise data management process, using a disposal process and method appropriate to the sensitivity of the data.",
+    "expected_page": 25,
+    "selected_page": 25,
+    "page_correct": true,
+    "expected_safeguard": "3.5",
+    "retrieval_context": [
+      "Page 25\n3.5 Securely Dispose of Data\nSecurely dispose of data as outlined in the enterprise’s data management process. Ensure the disposal process and method are commensurate with the data sensitivity.",
+      "Page 57\nCIS Controls v8\nDevelopers need to be trained in application security concepts and secure coding practices. This includes a process to acquire or evaluate third-party software, modules, and libraries used in the application to ensure they do not introduce security flaws. The developers should be taught what types of modules they can securely use, where they can be safely acquired, and which components they can, or should not, develop themselves (e.g., encryption).",
+      "Page 54\n15.7 Securely Decommission Service Providers\nSecurely decommission service providers. Example considerations include user and service account deactivation, termination of data flows, and secure disposal of enterprise data within service provider systems."
+    ]
+  }
+]
