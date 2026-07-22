@@ -2,12 +2,13 @@ from contextlib import asynccontextmanager
 from typing import Any, Iterator
 
 import json
-
+from src.auth.routes import router as auth_router
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.database.mongodb import mongodb
 from src.rag_service import RAGService
 
 
@@ -38,18 +39,35 @@ class ChatResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Load the RAG models and database connection once when
-    FastAPI starts, then reuse them for every request.
+    Initialize reusable application services once during startup.
+
+    Startup:
+    1. Connect to MongoDB.
+    2. Load the RAG models and connect to Weaviate.
+
+    Shutdown:
+    1. Close the RAG service.
+    2. Close MongoDB.
     """
 
-    rag_service = RAGService()
-    app.state.rag_service = rag_service
+    rag_service: RAGService | None = None
 
     try:
+        # Connect once and verify MongoDB is available.
+        mongodb.connect()
+        app.state.mongodb = mongodb
+
+        # Load models and connect to Weaviate once.
+        rag_service = RAGService()
+        app.state.rag_service = rag_service
+
         yield
 
     finally:
-        rag_service.close()
+        if rag_service is not None:
+            rag_service.close()
+
+        mongodb.close()
 
 
 # ============================================================
@@ -62,7 +80,7 @@ app = FastAPI(
         "Local RAG backend with standard and SSE-streaming "
         "chat endpoints."
     ),
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -78,6 +96,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add authentication routes:
+# POST /auth/register
+# POST /auth/login
+app.include_router(auth_router)
 
 
 # ============================================================
@@ -113,16 +136,39 @@ def format_sse(
 def health(
     request: Request,
 ) -> dict[str, Any]:
-    rag_service: RAGService = (
-        request.app.state.rag_service
-    )
+    """
+    Verify that the RAG service and MongoDB are available.
+    """
+
+    rag_service: RAGService = request.app.state.rag_service
+    mongo_service = request.app.state.mongodb
+
+    try:
+        mongo_service.client.admin.command("ping")
+        mongodb_status = "connected"
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "service": "CIS Controls Local RAG",
+                "mongodb": "disconnected",
+                "error": str(error),
+            },
+        ) from error
 
     return {
         "status": "ok",
         "service": "CIS Controls Local RAG",
-        "startup_timings": (
-            rag_service.startup_timings
-        ),
+        "components": {
+            "rag": "ready",
+            "mongodb": mongodb_status,
+        },
+        "database": {
+            "name": mongo_service.db.name,
+        },
+        "startup_timings": rag_service.startup_timings,
     }
 
 
@@ -142,9 +188,7 @@ def chat(
     Return the complete RAG answer as one JSON response.
     """
 
-    rag_service: RAGService = (
-        request.app.state.rag_service
-    )
+    rag_service: RAGService = request.app.state.rag_service
 
     try:
         return rag_service.answer_question(
@@ -193,16 +237,12 @@ def chat_stream(
     - error
     """
 
-    rag_service: RAGService = (
-        request.app.state.rag_service
-    )
+    rag_service: RAGService = request.app.state.rag_service
 
     def event_generator() -> Iterator[str]:
         try:
-            for item in (
-                rag_service.stream_answer_question(
-                    request_body.message
-                )
+            for item in rag_service.stream_answer_question(
+                request_body.message
             ):
                 yield format_sse(
                     item["event"],
