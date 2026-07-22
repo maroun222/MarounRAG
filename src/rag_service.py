@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-# Must be set before importing Hugging Face / Sentence Transformers.
 import os
 
+# Must be set before importing Hugging Face / Sentence Transformers.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
@@ -52,6 +52,7 @@ def env_int(name: str, default: int) -> int:
 
     try:
         return int(value)
+
     except ValueError as exc:
         raise ValueError(
             f"{name} must be an integer, got {value!r}"
@@ -66,6 +67,7 @@ def env_float(name: str, default: float) -> float:
 
     try:
         return float(value)
+
     except ValueError as exc:
         raise ValueError(
             f"{name} must be a number, got {value!r}"
@@ -138,8 +140,6 @@ class RAGConfig:
         384,
     )
 
-    # Keep this True for better passage selection.
-    # Set RAG_SECOND_PASS_RERANK=0 for a faster mode.
     second_pass_rerank: bool = env_bool(
         "RAG_SECOND_PASS_RERANK",
         True,
@@ -186,11 +186,15 @@ class Profiler:
         self.timings: dict[str, float] = {}
 
     @contextmanager
-    def measure(self, name: str) -> Iterator[None]:
+    def measure(
+        self,
+        name: str,
+    ) -> Iterator[None]:
         started = perf_counter()
 
         try:
             yield
+
         finally:
             self.timings[name] = round(
                 perf_counter() - started,
@@ -199,7 +203,10 @@ class Profiler:
 
 
 class RAGService:
-    """Reusable local RAG pipeline for the CLI and FastAPI backend."""
+    """
+    Reusable local RAG pipeline for the terminal,
+    FastAPI backend, and SSE streaming.
+    """
 
     def __init__(
         self,
@@ -207,7 +214,10 @@ class RAGService:
     ) -> None:
         self.config = config or RAGConfig()
 
-        self.startup_timings: dict[str, float] = {}
+        self.startup_timings: dict[
+            str,
+            float,
+        ] = {}
 
         self._answer_cache: OrderedDict[
             str,
@@ -235,7 +245,7 @@ class RAGService:
             self._create_ollama_client()
         )
 
-        # Cache vectors for repeated questions.
+        # Cache embeddings for repeated questions.
         self._embed_cached = lru_cache(
             maxsize=self.config.embedding_cache_size
         )(self._embed_uncached)
@@ -243,18 +253,28 @@ class RAGService:
         if self.config.warmup_ollama:
             self._warmup_ollama()
 
-        self.startup_timings["total_startup"] = round(
+        self.startup_timings[
+            "total_startup"
+        ] = round(
             sum(self.startup_timings.values()),
             6,
         )
 
+    # ============================================================
+    # Startup and model loading
+    # ============================================================
+
     def _configure_cpu(self) -> None:
         torch.set_num_threads(
-            max(1, self.config.torch_threads)
+            max(
+                1,
+                self.config.torch_threads,
+            )
         )
 
         try:
             torch.set_num_interop_threads(1)
+
         except RuntimeError:
             pass
 
@@ -269,8 +289,6 @@ class RAGService:
                 "device": "cpu",
                 "local_files_only": True,
             },
-            # Do not add show_progress_bar here.
-            # The wrapper already passes that argument.
             encode_kwargs={
                 "normalize_embeddings": True,
             },
@@ -294,7 +312,9 @@ class RAGService:
             self.config.reranker_model,
             device="cpu",
             local_files_only=True,
-            max_length=self.config.reranker_max_length,
+            max_length=(
+                self.config.reranker_max_length
+            ),
         )
 
         self.startup_timings[
@@ -316,7 +336,8 @@ class RAGService:
 
             raise RuntimeError(
                 "Weaviate is not ready. "
-                "Start Docker Desktop and weaviate-rag."
+                "Start Docker Desktop and "
+                "the weaviate-rag container."
             )
 
         collection = client.collections.use(
@@ -360,7 +381,9 @@ class RAGService:
             options={
                 "num_predict": 1,
             },
-            keep_alive=self.config.ollama_keep_alive,
+            keep_alive=(
+                self.config.ollama_keep_alive
+            ),
         )
 
         self.startup_timings[
@@ -369,6 +392,10 @@ class RAGService:
             perf_counter() - started,
             6,
         )
+
+    # ============================================================
+    # Question normalization and caching
+    # ============================================================
 
     @staticmethod
     def _normalize_question(
@@ -383,8 +410,10 @@ class RAGService:
         self,
         question: str,
     ) -> tuple[float, ...]:
-        vector = self.embedding_model.embed_query(
-            question
+        vector = (
+            self.embedding_model.embed_query(
+                question
+            )
         )
 
         return tuple(vector)
@@ -397,12 +426,16 @@ class RAGService:
             return None
 
         with self._cache_lock:
-            result = self._answer_cache.get(key)
+            result = self._answer_cache.get(
+                key
+            )
 
             if result is None:
                 return None
 
-            self._answer_cache.move_to_end(key)
+            self._answer_cache.move_to_end(
+                key
+            )
 
             return {
                 **result,
@@ -445,7 +478,9 @@ class RAGService:
                 ),
             }
 
-            self._answer_cache.move_to_end(key)
+            self._answer_cache.move_to_end(
+                key
+            )
 
             while (
                 len(self._answer_cache)
@@ -454,6 +489,10 @@ class RAGService:
                 self._answer_cache.popitem(
                     last=False
                 )
+
+    # ============================================================
+    # Retrieval
+    # ============================================================
 
     def _retrieve_chunks(
         self,
@@ -464,7 +503,9 @@ class RAGService:
             "question_embedding"
         ):
             query_vector = list(
-                self._embed_cached(question)
+                self._embed_cached(
+                    question
+                )
             )
 
         with profiler.measure(
@@ -474,7 +515,10 @@ class RAGService:
                 self.collection.query.near_vector(
                     near_vector=query_vector,
                     target_vector="default",
-                    limit=self.config.retrieval_top_k,
+                    limit=(
+                        self.config
+                        .retrieval_top_k
+                    ),
                     return_properties=[
                         "text",
                         "page_number",
@@ -482,7 +526,9 @@ class RAGService:
                 )
             )
 
-        chunks: list[dict[str, Any]] = []
+        chunks: list[
+            dict[str, Any]
+        ] = []
 
         for result in results.objects:
             text = str(
@@ -509,6 +555,10 @@ class RAGService:
 
         return chunks
 
+    # ============================================================
+    # Chunk reranking
+    # ============================================================
+
     def _rerank_chunks(
         self,
         question: str,
@@ -529,7 +579,8 @@ class RAGService:
             scores = self.reranker.predict(
                 pairs,
                 batch_size=(
-                    self.config.rerank_batch_size
+                    self.config
+                    .rerank_batch_size
                 ),
                 show_progress_bar=False,
                 convert_to_numpy=True,
@@ -538,7 +589,9 @@ class RAGService:
         ranked = [
             {
                 **chunk,
-                "semantic_score": float(score),
+                "semantic_score": float(
+                    score
+                ),
             }
             for chunk, score in zip(
                 chunks,
@@ -555,25 +608,37 @@ class RAGService:
 
         return ranked
 
+    # ============================================================
+    # Passage extraction
+    # ============================================================
+
     @staticmethod
     def _extract_passages(
         chunk: dict[str, Any],
     ) -> list[dict[str, Any]]:
         blocks = [
-            " ".join(block.split())
-            for block in chunk["text"].split(
-                "\n\n"
+            " ".join(
+                block.split()
             )
+            for block in chunk[
+                "text"
+            ].split("\n\n")
             if block.strip()
         ]
 
-        passages: list[dict[str, Any]] = []
+        passages: list[
+            dict[str, Any]
+        ] = []
+
         heading: str | None = None
 
         for block in blocks:
-            words = WORD_RE.findall(block)
+            words = WORD_RE.findall(
+                block
+            )
 
-            # Preserve the original heading heuristic.
+            # Short meaningful blocks
+            # are treated as headings.
             if (
                 len(block) < 150
                 and len(words) >= 3
@@ -587,17 +652,18 @@ class RAGService:
 
             if heading:
                 passage_text = (
-                    heading
-                    + "\n"
-                    + block
+                    f"{heading}\n{block}"
                 )
+
             else:
                 passage_text = block
 
             passages.append(
                 {
                     "text": passage_text,
-                    "page": chunk["page"],
+                    "page": chunk[
+                        "page"
+                    ],
                     "semantic_score": chunk[
                         "semantic_score"
                     ],
@@ -610,7 +676,9 @@ class RAGService:
 
     def _build_passages(
         self,
-        ranked_chunks: list[dict[str, Any]],
+        ranked_chunks: list[
+            dict[str, Any]
+        ],
         profiler: Profiler,
     ) -> list[dict[str, Any]]:
         with profiler.measure(
@@ -621,13 +689,18 @@ class RAGService:
                 dict[str, Any],
             ] = {}
 
-            selected_chunks = ranked_chunks[
-                : self.config.top_chunks_for_passages
-            ]
+            selected_chunks = (
+                ranked_chunks[
+                    : self.config
+                    .top_chunks_for_passages
+                ]
+            )
 
             for chunk in selected_chunks:
                 extracted = (
-                    self._extract_passages(chunk)
+                    self._extract_passages(
+                        chunk
+                    )
                 )
 
                 if not extracted:
@@ -640,9 +713,11 @@ class RAGService:
                         "text"
                     ].casefold()
 
-                    previous = unique.get(key)
+                    previous = unique.get(
+                        key
+                    )
 
-                    if (
+                    should_replace = (
                         previous is None
                         or passage[
                             "semantic_score"
@@ -657,10 +732,16 @@ class RAGService:
                             == previous[
                                 "semantic_score"
                             ]
-                            and passage["page"]
-                            < previous["page"]
+                            and passage[
+                                "page"
+                            ]
+                            < previous[
+                                "page"
+                            ]
                         )
-                    ):
+                    )
+
+                    if should_replace:
                         unique[key] = passage
 
             passages = list(
@@ -669,16 +750,22 @@ class RAGService:
 
         if not passages:
             raise RuntimeError(
-                "No useful passages were found "
-                "after retrieval."
+                "No useful passages were "
+                "found after retrieval."
             )
 
         return passages
 
+    # ============================================================
+    # Passage reranking and custom scoring
+    # ============================================================
+
     def _select_best_passage(
         self,
         question: str,
-        passages: list[dict[str, Any]],
+        passages: list[
+            dict[str, Any]
+        ],
         profiler: Profiler,
     ) -> tuple[
         dict[str, Any],
@@ -696,13 +783,16 @@ class RAGService:
             with profiler.measure(
                 "passage_reranking"
             ):
-                scores = self.reranker.predict(
-                    pairs,
-                    batch_size=(
-                        self.config.rerank_batch_size
-                    ),
-                    show_progress_bar=False,
-                    convert_to_numpy=True,
+                scores = (
+                    self.reranker.predict(
+                        pairs,
+                        batch_size=(
+                            self.config
+                            .rerank_batch_size
+                        ),
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                    )
                 )
 
             for passage, score in zip(
@@ -723,8 +813,10 @@ class RAGService:
         ):
             question_words = {
                 word.lower()
-                for word in WORD_RE.findall(
-                    question
+                for word in (
+                    WORD_RE.findall(
+                        question
+                    )
                 )
                 if word.lower()
                 not in STOP_WORDS
@@ -740,15 +832,19 @@ class RAGService:
 
                 heading_words = {
                     word.lower()
-                    for word in WORD_RE.findall(
-                        heading
+                    for word in (
+                        WORD_RE.findall(
+                            heading
+                        )
                     )
                 }
 
                 passage_words = {
                     word.lower()
-                    for word in WORD_RE.findall(
-                        passage["text"]
+                    for word in (
+                        WORD_RE.findall(
+                            passage["text"]
+                        )
                     )
                 }
 
@@ -763,21 +859,28 @@ class RAGService:
                 )
 
                 score = (
-                    passage["semantic_score"]
-                    + 1.5 * heading_matches
-                    + 0.20 * passage_matches
+                    passage[
+                        "semantic_score"
+                    ]
+                    + 1.5
+                    * heading_matches
+                    + 0.20
+                    * passage_matches
                 )
 
-                # Prevent active/passive confusion.
+                # Prevent confusion between
+                # active and passive discovery.
                 if (
-                    "active" in question_words
+                    "active"
+                    in question_words
                     and "passive"
                     in heading_words
                 ):
                     score -= 5.0
 
                 if (
-                    "passive" in question_words
+                    "passive"
+                    in question_words
                     and "active"
                     in heading_words
                 ):
@@ -796,19 +899,17 @@ class RAGService:
 
         return passages[0], passages
 
-    def _generate_answer(
-        self,
-        question: str,
-        best_passage: dict[str, Any],
-        profiler: Profiler,
-    ) -> str:
-        page = best_passage["page"]
-        passage_text = best_passage["text"]
+    # ============================================================
+    # Prompt
+    # ============================================================
 
-        with profiler.measure(
-            "prompt_construction"
-        ):
-            system_message = """
+    @staticmethod
+    def _build_prompt(
+        question: str,
+        page: int,
+        passage_text: str,
+    ) -> tuple[str, str]:
+        system_message = """
 You are a precise extractive question-answering assistant.
 Answer only using facts explicitly written in the supplied passage.
 
@@ -824,7 +925,7 @@ Rules:
 - End the answer with: Source: Page <page number>.
 """.strip()
 
-            user_message = f"""
+        user_message = f"""
 Question:
 {question}
 
@@ -836,38 +937,87 @@ Write a complete answer that explains both what must be done and how often.
 Do not respond with only a frequency.
 """.strip()
 
+        return (
+            system_message,
+            user_message,
+        )
+
+    # ============================================================
+    # Non-streaming generation
+    # ============================================================
+
+    def _generate_answer(
+        self,
+        question: str,
+        best_passage: dict[str, Any],
+        profiler: Profiler,
+    ) -> str:
+        page = best_passage["page"]
+
+        passage_text = best_passage[
+            "text"
+        ]
+
+        with profiler.measure(
+            "prompt_construction"
+        ):
+            (
+                system_message,
+                user_message,
+            ) = self._build_prompt(
+                question,
+                page,
+                passage_text,
+            )
+
         with profiler.measure(
             "ollama_generation"
         ):
-            response = self.ollama_client.chat(
-                model=(
-                    self.config.generation_model
-                ),
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_message,
-                    },
-                    {
-                        "role": "user",
-                        "content": user_message,
-                    },
-                ],
-                options={
-                    "temperature": 0.0,
-                    "num_ctx": (
-                        self.config.num_ctx
+            response = (
+                self.ollama_client.chat(
+                    model=(
+                        self.config
+                        .generation_model
                     ),
-                    "num_predict": (
-                        self.config.num_predict
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                system_message
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                user_message
+                            ),
+                        },
+                    ],
+                    options={
+                        "temperature": 0.0,
+                        "num_ctx": (
+                            self.config
+                            .num_ctx
+                        ),
+                        "num_predict": (
+                            self.config
+                            .num_predict
+                        ),
+                    },
+                    keep_alive=(
+                        self.config
+                        .ollama_keep_alive
                     ),
-                },
-                keep_alive=(
-                    self.config.ollama_keep_alive
-                ),
+                )
             )
 
-        return response.message.content.strip()
+        return (
+            response.message.content.strip()
+        )
+
+    # ============================================================
+    # Complete non-streaming request
+    # ============================================================
 
     def answer_question(
         self,
@@ -890,7 +1040,10 @@ Do not respond with only a frequency.
             )
 
         cache_key = question.casefold()
-        request_started = perf_counter()
+
+        request_started = (
+            perf_counter()
+        )
 
         if use_cache:
             cached = self._cache_get(
@@ -904,7 +1057,9 @@ Do not respond with only a frequency.
                     6,
                 )
 
-                cached["cache_hit"] = True
+                cached[
+                    "cache_hit"
+                ] = True
 
                 cached["timings"] = {
                     "cache_lookup": elapsed,
@@ -913,9 +1068,9 @@ Do not respond with only a frequency.
 
                 return cached
 
-        # Heavy local inference is serialized to prevent
-        # CPU and RAM contention.
         with self._inference_lock:
+            # Check again after waiting
+            # for the inference lock.
             if use_cache:
                 cached = self._cache_get(
                     cache_key
@@ -928,7 +1083,9 @@ Do not respond with only a frequency.
                         6,
                     )
 
-                    cached["cache_hit"] = True
+                    cached[
+                        "cache_hit"
+                    ] = True
 
                     cached["timings"] = {
                         "cache_lookup": elapsed,
@@ -939,13 +1096,18 @@ Do not respond with only a frequency.
 
             profiler = Profiler()
 
-            chunks = self._retrieve_chunks(
-                question,
-                profiler,
+            chunks = (
+                self._retrieve_chunks(
+                    question,
+                    profiler,
+                )
             )
 
             if not chunks:
-                result: dict[str, Any] = {
+                result: dict[
+                    str,
+                    Any,
+                ] = {
                     "answer": (
                         "No relevant passages "
                         "were found."
@@ -954,7 +1116,9 @@ Do not respond with only a frequency.
                     "context": "",
                     "retrieval_context": [],
                     "cache_hit": False,
-                    "timings": profiler.timings,
+                    "timings": (
+                        profiler.timings
+                    ),
                 }
 
             else:
@@ -976,16 +1140,20 @@ Do not respond with only a frequency.
                 (
                     best_passage,
                     ranked_passages,
-                ) = self._select_best_passage(
-                    question,
-                    passages,
-                    profiler,
+                ) = (
+                    self._select_best_passage(
+                        question,
+                        passages,
+                        profiler,
+                    )
                 )
 
-                answer = self._generate_answer(
-                    question,
-                    best_passage,
-                    profiler,
+                answer = (
+                    self._generate_answer(
+                        question,
+                        best_passage,
+                        profiler,
+                    )
                 )
 
                 result = {
@@ -1006,10 +1174,14 @@ Do not respond with only a frequency.
                         in ranked_passages[:3]
                     ],
                     "cache_hit": False,
-                    "timings": profiler.timings,
+                    "timings": (
+                        profiler.timings
+                    ),
                 }
 
-            result["timings"]["total"] = round(
+            result[
+                "timings"
+            ]["total"] = round(
                 perf_counter()
                 - request_started,
                 6,
@@ -1017,7 +1189,8 @@ Do not respond with only a frequency.
 
             if (
                 use_cache
-                and result["page"] is not None
+                and result["page"]
+                is not None
             ):
                 self._cache_put(
                     cache_key,
@@ -1025,6 +1198,396 @@ Do not respond with only a frequency.
                 )
 
             return result
+
+    # ============================================================
+    # SSE streaming request
+    # ============================================================
+
+    def stream_answer_question(
+        self,
+        question: str,
+        *,
+        use_cache: bool = True,
+    ) -> Iterator[
+        dict[str, Any]
+    ]:
+        """
+        Yield RAG events progressively.
+
+        Events:
+        - status
+        - metadata
+        - token
+        - done
+        - error
+        """
+
+        if self._closed:
+            raise RuntimeError(
+                "RAGService is already closed."
+            )
+
+        question = self._normalize_question(
+            question
+        )
+
+        if not question:
+            raise ValueError(
+                "Question cannot be empty."
+            )
+
+        cache_key = question.casefold()
+
+        request_started = (
+            perf_counter()
+        )
+
+        # Return cached answers
+        # immediately.
+        if use_cache:
+            cached = self._cache_get(
+                cache_key
+            )
+
+            if cached is not None:
+                elapsed = round(
+                    perf_counter()
+                    - request_started,
+                    6,
+                )
+
+                yield {
+                    "event": "status",
+                    "data": {
+                        "message": (
+                            "Using cached "
+                            "answer..."
+                        ),
+                    },
+                }
+
+                yield {
+                    "event": "metadata",
+                    "data": {
+                        "page": cached[
+                            "page"
+                        ],
+                        "cache_hit": True,
+                    },
+                }
+
+                yield {
+                    "event": "token",
+                    "data": {
+                        "text": cached[
+                            "answer"
+                        ],
+                    },
+                }
+
+                yield {
+                    "event": "done",
+                    "data": {
+                        "page": cached[
+                            "page"
+                        ],
+                        "cache_hit": True,
+                        "timings": {
+                            "cache_lookup": (
+                                elapsed
+                            ),
+                            "total": elapsed,
+                        },
+                    },
+                }
+
+                return
+
+        with self._inference_lock:
+            # Recheck cache after waiting.
+            if use_cache:
+                cached = self._cache_get(
+                    cache_key
+                )
+
+                if cached is not None:
+                    elapsed = round(
+                        perf_counter()
+                        - request_started,
+                        6,
+                    )
+
+                    yield {
+                        "event": "status",
+                        "data": {
+                            "message": (
+                                "Using cached "
+                                "answer..."
+                            ),
+                        },
+                    }
+
+                    yield {
+                        "event": "metadata",
+                        "data": {
+                            "page": cached[
+                                "page"
+                            ],
+                            "cache_hit": True,
+                        },
+                    }
+
+                    yield {
+                        "event": "token",
+                        "data": {
+                            "text": cached[
+                                "answer"
+                            ],
+                        },
+                    }
+
+                    yield {
+                        "event": "done",
+                        "data": {
+                            "page": cached[
+                                "page"
+                            ],
+                            "cache_hit": True,
+                            "timings": {
+                                "cache_lookup": (
+                                    elapsed
+                                ),
+                                "total": elapsed,
+                            },
+                        },
+                    }
+
+                    return
+
+            profiler = Profiler()
+
+            yield {
+                "event": "status",
+                "data": {
+                    "message": (
+                        "Retrieving relevant "
+                        "passages..."
+                    ),
+                },
+            }
+
+            chunks = (
+                self._retrieve_chunks(
+                    question,
+                    profiler,
+                )
+            )
+
+            if not chunks:
+                yield {
+                    "event": "error",
+                    "data": {
+                        "message": (
+                            "No relevant passages "
+                            "were found."
+                        ),
+                    },
+                }
+
+                return
+
+            yield {
+                "event": "status",
+                "data": {
+                    "message": (
+                        "Reranking passages..."
+                    ),
+                },
+            }
+
+            ranked_chunks = (
+                self._rerank_chunks(
+                    question,
+                    chunks,
+                    profiler,
+                )
+            )
+
+            passages = (
+                self._build_passages(
+                    ranked_chunks,
+                    profiler,
+                )
+            )
+
+            (
+                best_passage,
+                ranked_passages,
+            ) = (
+                self._select_best_passage(
+                    question,
+                    passages,
+                    profiler,
+                )
+            )
+
+            page = best_passage[
+                "page"
+            ]
+
+            passage_text = best_passage[
+                "text"
+            ]
+
+            yield {
+                "event": "metadata",
+                "data": {
+                    "page": page,
+                    "cache_hit": False,
+                },
+            }
+
+            yield {
+                "event": "status",
+                "data": {
+                    "message": (
+                        "Generating answer..."
+                    ),
+                },
+            }
+
+            with profiler.measure(
+                "prompt_construction"
+            ):
+                (
+                    system_message,
+                    user_message,
+                ) = self._build_prompt(
+                    question,
+                    page,
+                    passage_text,
+                )
+
+            answer_parts: list[
+                str
+            ] = []
+
+            with profiler.measure(
+                "ollama_generation"
+            ):
+                response_stream = (
+                    self.ollama_client.chat(
+                        model=(
+                            self.config
+                            .generation_model
+                        ),
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    system_message
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": (
+                                    user_message
+                                ),
+                            },
+                        ],
+                        options={
+                            "temperature": 0.0,
+                            "num_ctx": (
+                                self.config
+                                .num_ctx
+                            ),
+                            "num_predict": (
+                                self.config
+                                .num_predict
+                            ),
+                        },
+                        keep_alive=(
+                            self.config
+                            .ollama_keep_alive
+                        ),
+                        stream=True,
+                    )
+                )
+
+                for response_chunk in (
+                    response_stream
+                ):
+                    token = (
+                        response_chunk
+                        .message
+                        .content
+                    )
+
+                    if not token:
+                        continue
+
+                    answer_parts.append(
+                        token
+                    )
+
+                    yield {
+                        "event": "token",
+                        "data": {
+                            "text": token,
+                        },
+                    }
+
+            final_answer = "".join(
+                answer_parts
+            ).strip()
+
+            profiler.timings[
+                "total"
+            ] = round(
+                perf_counter()
+                - request_started,
+                6,
+            )
+
+            result = {
+                "answer": final_answer,
+                "page": page,
+                "context": passage_text,
+                "retrieval_context": [
+                    (
+                        f"Page "
+                        f"{passage['page']}\n"
+                        f"{passage['text']}"
+                    )
+                    for passage
+                    in ranked_passages[:3]
+                ],
+                "cache_hit": False,
+                "timings": (
+                    profiler.timings
+                ),
+            }
+
+            if use_cache:
+                self._cache_put(
+                    cache_key,
+                    result,
+                )
+
+            yield {
+                "event": "done",
+                "data": {
+                    "page": page,
+                    "cache_hit": False,
+                    "timings": (
+                        profiler.timings
+                    ),
+                },
+            }
+
+    # ============================================================
+    # Retrieval-only helper
+    # ============================================================
 
     def retrieve_only(
         self,
@@ -1046,8 +1609,12 @@ Do not respond with only a frequency.
             profiler,
         )
 
-        profiler.timings["total"] = round(
-            sum(profiler.timings.values()),
+        profiler.timings[
+            "total"
+        ] = round(
+            sum(
+                profiler.timings.values()
+            ),
             6,
         )
 
@@ -1055,6 +1622,10 @@ Do not respond with only a frequency.
             "chunks": chunks,
             "timings": profiler.timings,
         }
+
+    # ============================================================
+    # Reranking-only helper
+    # ============================================================
 
     def rank_only(
         self,
@@ -1079,18 +1650,24 @@ Do not respond with only a frequency.
         if not chunks:
             return {
                 "passages": [],
-                "timings": profiler.timings,
+                "timings": (
+                    profiler.timings
+                ),
             }
 
-        ranked_chunks = self._rerank_chunks(
-            question,
-            chunks,
-            profiler,
+        ranked_chunks = (
+            self._rerank_chunks(
+                question,
+                chunks,
+                profiler,
+            )
         )
 
-        passages = self._build_passages(
-            ranked_chunks,
-            profiler,
+        passages = (
+            self._build_passages(
+                ranked_chunks,
+                profiler,
+            )
         )
 
         _, ranked_passages = (
@@ -1101,8 +1678,12 @@ Do not respond with only a frequency.
             )
         )
 
-        profiler.timings["total"] = round(
-            sum(profiler.timings.values()),
+        profiler.timings[
+            "total"
+        ] = round(
+            sum(
+                profiler.timings.values()
+            ),
             6,
         )
 
@@ -1110,6 +1691,10 @@ Do not respond with only a frequency.
             "passages": ranked_passages,
             "timings": profiler.timings,
         }
+
+    # ============================================================
+    # Cleanup
+    # ============================================================
 
     def clear_caches(self) -> None:
         with self._cache_lock:
@@ -1123,11 +1708,14 @@ Do not respond with only a frequency.
 
         try:
             self.ollama_client.close()
+
         finally:
             self.weaviate_client.close()
             self._closed = True
 
-    def __enter__(self) -> "RAGService":
+    def __enter__(
+        self,
+    ) -> "RAGService":
         return self
 
     def __exit__(
