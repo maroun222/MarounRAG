@@ -8,4 +8,9 @@ public interface IRagApiClient
         RagQueryRequest request,
         CancellationToken cancellationToken = default
     );
+
+    Task<HttpResponseMessage> StreamQueryAsync(
+        RagQueryRequest request,
+        CancellationToken cancellationToken = default
+    );
 }

@@ -20,6 +20,10 @@ public sealed class RagController : ControllerBase
         _logger = logger;
     }
 
+    // ========================================================
+    // Normal non-streaming query
+    // ========================================================
+
     [HttpPost("query")]
     [ProducesResponseType<RagQueryResponse>(
         StatusCodes.Status200OK
@@ -61,12 +65,11 @@ public sealed class RagController : ControllerBase
                 }
             );
         }
-        catch (
-            Exception exception
-        ) when (
-            exception is HttpRequestException
-            or InvalidOperationException
-        )
+        catch (Exception exception)
+            when (
+                exception is HttpRequestException
+                or InvalidOperationException
+            )
         {
             _logger.LogError(
                 exception,
@@ -80,6 +83,133 @@ public sealed class RagController : ControllerBase
                     error = "The RAG service is unavailable."
                 }
             );
+        }
+    }
+
+    // ========================================================
+    // SSE streaming query
+    // ========================================================
+
+    [HttpPost("query/stream")]
+    [Produces("text/event-stream")]
+    public async Task StreamQuery(
+        [FromBody] RagQueryRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        HttpResponseMessage? upstreamResponse = null;
+
+        try
+        {
+            upstreamResponse =
+                await _ragApiClient.StreamQueryAsync(
+                    request,
+                    cancellationToken
+                );
+
+            if (!upstreamResponse.IsSuccessStatusCode)
+            {
+                _logger.LogError(
+                    "Python RAG streaming request failed with status {StatusCode}.",
+                    upstreamResponse.StatusCode
+                );
+
+                Response.StatusCode =
+                    StatusCodes.Status502BadGateway;
+
+                await Response.WriteAsJsonAsync(
+                    new
+                    {
+                        error = "The RAG service is unavailable."
+                    },
+                    cancellationToken
+                );
+
+                return;
+            }
+
+            Response.StatusCode = StatusCodes.Status200OK;
+            Response.ContentType = "text/event-stream";
+
+            Response.Headers["Cache-Control"] = "no-cache";
+            Response.Headers["X-Accel-Buffering"] = "no";
+
+            await Response.StartAsync(
+                cancellationToken
+            );
+
+            await using System.IO.Stream upstreamStream =
+                await upstreamResponse.Content.ReadAsStreamAsync(
+                    cancellationToken
+                );
+
+            byte[] buffer = new byte[8192];
+
+            while (true)
+            {
+                int bytesRead =
+                    await upstreamStream.ReadAsync(
+                        buffer.AsMemory(
+                            0,
+                            buffer.Length
+                        ),
+                        cancellationToken
+                    );
+
+                if (bytesRead == 0)
+                {
+                    break;
+                }
+
+                await Response.Body.WriteAsync(
+                    buffer.AsMemory(
+                        0,
+                        bytesRead
+                    ),
+                    cancellationToken
+                );
+
+                await Response.Body.FlushAsync(
+                    cancellationToken
+                );
+            }
+        }
+        catch (OperationCanceledException)
+            when (HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogInformation(
+                "The client disconnected from the RAG stream."
+            );
+        }
+        catch (Exception exception)
+            when (
+                exception is HttpRequestException
+                or InvalidOperationException
+                or TaskCanceledException
+            )
+        {
+            _logger.LogError(
+                exception,
+                "The Python RAG streaming request failed."
+            );
+
+            if (!Response.HasStarted)
+            {
+                Response.StatusCode =
+                    StatusCodes.Status502BadGateway;
+
+                await Response.WriteAsJsonAsync(
+                    new
+                    {
+                        error = "The RAG streaming service is unavailable."
+                    },
+                    cancellationToken
+                );
+            }
+        }
+        finally
+        {
+            upstreamResponse?.Dispose();
         }
     }
 }
