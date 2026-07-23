@@ -1,4 +1,7 @@
 using RagMiddleware.Infrastructure.Configuration;
+using Microsoft.Extensions.Options;
+using RagMiddleware.Application.Abstractions;
+using RagMiddleware.Infrastructure.Clients;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +15,20 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddHttpClient<IRagApiClient, RagApiClient>(
+    (serviceProvider, httpClient) =>
+    {
+        RagApiOptions options = serviceProvider
+            .GetRequiredService<IOptions<RagApiOptions>>()
+            .Value;
+
+        httpClient.BaseAddress = new Uri(
+            $"{options.BaseUrl.TrimEnd('/')}/"
+        );
+
+        httpClient.Timeout = TimeSpan.FromMinutes(5);
+    }
+);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
