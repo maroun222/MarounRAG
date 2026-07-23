@@ -1,59 +1,156 @@
-const API_URL =
+const API_BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
-  "http://127.0.0.1:8000";
+  "http://127.0.0.1:5050";
+
 
 /**
- * Check whether the FastAPI backend is available.
+ * Read an error response without exposing raw backend details.
  */
-export async function checkHealth() {
-  const response = await fetch(`${API_URL}/health`);
+async function getErrorMessage(response) {
+  try {
+    const data = await response.json();
 
-  if (!response.ok) {
-    throw new Error(`Backend health check failed: ${response.status}`);
+    return (
+      data?.error ||
+      data?.detail ||
+      data?.title ||
+      `Request failed with status ${response.status}.`
+    );
+  } catch {
+    return `Request failed with status ${response.status}.`;
   }
-
-  return response.json();
 }
 
+
 /**
- * Send a question using the original non-streaming endpoint.
- * This can remain available as a fallback.
+ * Check whether the .NET middleware is running.
  */
-export async function sendChatMessage(message) {
-  const response = await fetch(`${API_URL}/chat`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      message,
-    }),
-  });
+export async function checkHealth() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+      },
+    });
 
-  if (!response.ok) {
-    let errorMessage = `Request failed with status ${response.status}`;
-
-    try {
-      const errorData = await response.json();
-      errorMessage =
-        errorData.detail ||
-        errorData.message ||
-        errorData.error ||
-        errorMessage;
-    } catch {
-      // The response was not JSON.
+    if (!response.ok) {
+      return false;
     }
 
+    const data = await response.json();
+
+    return data?.status === "ok";
+  } catch {
+    return false;
+  }
+}
+
+
+/**
+ * Send a normal, non-streaming RAG request through the .NET middleware.
+ */
+export async function sendChatMessage(message, signal = undefined) {
+  const normalizedMessage = message?.trim();
+
+  if (!normalizedMessage) {
+    throw new Error("Message cannot be empty.");
+  }
+
+  let response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/rag/query`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        message: normalizedMessage,
+      }),
+      signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw error;
+    }
+
+    throw new Error(
+      "Could not connect to the middleware. " +
+        "Make sure the .NET API is running on port 5050."
+    );
+  }
+
+  if (!response.ok) {
+    const errorMessage = await getErrorMessage(response);
     throw new Error(errorMessage);
   }
 
   return response.json();
 }
 
+
 /**
- * Send a question to the SSE streaming endpoint.
+ * Parse one complete Server-Sent Events block.
  *
- * Supported backend events:
+ * Example:
+ *
+ * event: token
+ * data: {"text":"Hello"}
+ */
+function parseSseBlock(block) {
+  let eventName = "message";
+  const dataLines = [];
+
+  const lines = block.split(/\r?\n/);
+
+  for (const line of lines) {
+    if (!line || line.startsWith(":")) {
+      continue;
+    }
+
+    if (line.startsWith("event:")) {
+      eventName = line.slice("event:".length).trim();
+      continue;
+    }
+
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) {
+    return null;
+  }
+
+  const rawData = dataLines.join("\n");
+
+  let data;
+
+  try {
+    data = JSON.parse(rawData);
+  } catch {
+    data = {
+      message: rawData,
+    };
+  }
+
+  return {
+    event: eventName,
+    data,
+  };
+}
+
+
+/**
+ * Send a streaming RAG request through:
+ *
+ * React
+ *   -> .NET middleware
+ *   -> Python RAG API
+ *
+ * Supported SSE events:
  * - status
  * - metadata
  * - token
@@ -69,140 +166,60 @@ export async function streamChatMessage(
     onDone,
     onError,
     signal,
-  } = {},
+  } = {}
 ) {
-  if (!message || !message.trim()) {
-    throw new Error("The question cannot be empty.");
+  const normalizedMessage = message?.trim();
+
+  if (!normalizedMessage) {
+    throw new Error("Message cannot be empty.");
   }
 
   let response;
 
   try {
-    response = await fetch(`${API_URL}/chat/stream`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify({
-        message: message.trim(),
-      }),
-      signal,
-    });
+    response = await fetch(
+      `${API_BASE_URL}/api/rag/query/stream`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          message: normalizedMessage,
+        }),
+        signal,
+      }
+    );
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (error?.name === "AbortError") {
       throw error;
     }
 
-    const networkError = new Error(
-      "Could not connect to the backend. Make sure FastAPI is running on port 8000.",
+    throw new Error(
+      "Could not connect to the middleware. " +
+        "Make sure the .NET API is running on port 5050."
     );
-
-    onError?.({
-      message: networkError.message,
-    });
-
-    throw networkError;
   }
 
   if (!response.ok) {
-    let errorMessage = `Streaming request failed with status ${response.status}`;
-
-    try {
-      const errorData = await response.json();
-
-      errorMessage =
-        errorData.detail ||
-        errorData.message ||
-        errorData.error ||
-        errorMessage;
-    } catch {
-      const responseText = await response.text();
-
-      if (responseText) {
-        errorMessage = responseText;
-      }
-    }
-
-    const requestError = new Error(errorMessage);
-
-    onError?.({
-      message: errorMessage,
-    });
-
-    throw requestError;
+    const errorMessage = await getErrorMessage(response);
+    throw new Error(errorMessage);
   }
 
   if (!response.body) {
-    const streamError = new Error(
-      "The browser did not receive a readable response stream.",
+    throw new Error(
+      "The middleware returned an empty streaming response."
     );
-
-    onError?.({
-      message: streamError.message,
-    });
-
-    throw streamError;
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
 
   let buffer = "";
-  let streamCompleted = false;
 
-  /**
-   * Process one complete SSE event block.
-   *
-   * Example:
-   *
-   * event: token
-   * data: {"text":"Hello"}
-   */
-  const processEventBlock = (eventBlock) => {
-    if (!eventBlock.trim()) {
-      return;
-    }
-
-    const lines = eventBlock.split(/\r?\n/);
-
-    let eventName = "message";
-    const dataLines = [];
-
-    for (const line of lines) {
-      if (line.startsWith(":")) {
-        // SSE comment or keep-alive line.
-        continue;
-      }
-
-      if (line.startsWith("event:")) {
-        eventName = line.slice("event:".length).trim();
-        continue;
-      }
-
-      if (line.startsWith("data:")) {
-        dataLines.push(line.slice("data:".length).trimStart());
-      }
-    }
-
-    if (dataLines.length === 0) {
-      return;
-    }
-
-    const rawData = dataLines.join("\n");
-
-    let data;
-
-    try {
-      data = JSON.parse(rawData);
-    } catch {
-      data = {
-        message: rawData,
-        text: rawData,
-      };
-    }
-
-    switch (eventName) {
+  const dispatchEvent = ({ event, data }) => {
+    switch (event) {
       case "status":
         onStatus?.(data);
         break;
@@ -216,27 +233,16 @@ export async function streamChatMessage(
         break;
 
       case "done":
-        streamCompleted = true;
         onDone?.(data);
         break;
 
-      case "error": {
-        const message =
-          data.message ||
-          data.detail ||
-          data.error ||
-          "The backend reported a streaming error.";
-
-        onError?.({
-          ...data,
-          message,
-        });
-
-        throw new Error(message);
-      }
+      case "error":
+        onError?.(data);
+        break;
 
       default:
-        console.warn("Unknown SSE event received:", eventName, data);
+        // Ignore unknown SSE events safely.
+        break;
     }
   };
 
@@ -245,12 +251,6 @@ export async function streamChatMessage(
       const { value, done } = await reader.read();
 
       if (done) {
-        buffer += decoder.decode();
-
-        if (buffer.trim()) {
-          processEventBlock(buffer);
-        }
-
         break;
       }
 
@@ -259,44 +259,52 @@ export async function streamChatMessage(
       });
 
       /*
-       * SSE events are separated by a blank line.
+       * SSE events are separated by an empty line.
        * This supports both:
-       *
-       * \n\n
-       * \r\n\r\n
+       * - \n\n
+       * - \r\n\r\n
        */
-      const eventBlocks = buffer.split(/\r?\n\r?\n/);
+      const blocks = buffer.split(/\r?\n\r?\n/);
 
-      // The last item may be an incomplete event.
-      buffer = eventBlocks.pop() ?? "";
+      /*
+       * The final item may be incomplete, so keep it for
+       * the next network chunk.
+       */
+      buffer = blocks.pop() ?? "";
 
-      for (const eventBlock of eventBlocks) {
-        processEventBlock(eventBlock);
+      for (const block of blocks) {
+        const parsedEvent = parseSseBlock(block);
+
+        if (parsedEvent) {
+          dispatchEvent(parsedEvent);
+        }
       }
     }
 
     /*
-     * Normally the backend sends an explicit "done" event.
-     * This fallback handles a stream that closes normally without one.
+     * Flush any bytes still held by TextDecoder.
      */
-    if (!streamCompleted) {
-      onDone?.({
-        stream_closed: true,
-      });
+    buffer += decoder.decode();
+
+    if (buffer.trim()) {
+      const parsedEvent = parseSseBlock(buffer);
+
+      if (parsedEvent) {
+        dispatchEvent(parsedEvent);
+      }
     }
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (error?.name === "AbortError") {
       throw error;
     }
 
-    onError?.({
-      message: error.message || "The response stream failed.",
-    });
-
-    throw error;
+    throw new Error(
+      "The connection to the middleware stream was interrupted."
+    );
   } finally {
     reader.releaseLock();
   }
 }
 
-export { API_URL };
+
+export { API_BASE_URL };

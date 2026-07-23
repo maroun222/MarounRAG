@@ -4,6 +4,24 @@ using RagMiddleware.Application.Abstractions;
 using RagMiddleware.Infrastructure.Clients;
 
 var builder = WebApplication.CreateBuilder(args);
+const string FrontendCorsPolicy = "FrontendCors";
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(
+        FrontendCorsPolicy,
+        policy =>
+        {
+            policy
+                .WithOrigins(
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173"
+                )
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        }
+    );
+});
 
 builder.Services
     .AddOptions<RagApiOptions>()
@@ -39,7 +57,9 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-app.UseHttpsRedirection();
+app.UseCors(FrontendCorsPolicy);
+
+//app.UseHttpsRedirection();
 
 app.MapControllers();
 
