@@ -2,6 +2,7 @@ using RagMiddleware.Infrastructure.Configuration;
 using Microsoft.Extensions.Options;
 using RagMiddleware.Application.Abstractions;
 using RagMiddleware.Infrastructure.Clients;
+using RagMiddleware.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 const string FrontendCorsPolicy = "FrontendCors";
@@ -32,6 +33,18 @@ builder.Services
     )
     .ValidateDataAnnotations()
     .ValidateOnStart();
+
+builder.Services
+    .AddOptions<MongoDbOptions>()
+    .Bind(
+        builder.Configuration.GetSection(
+            MongoDbOptions.SectionName
+        )
+    )
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddSingleton<MongoDbContext>();
 
 builder.Services.AddHttpClient<IRagApiClient, RagApiClient>(
     (serviceProvider, httpClient) =>
