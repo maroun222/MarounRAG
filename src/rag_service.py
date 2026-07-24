@@ -445,6 +445,14 @@ class RAGService:
                         [],
                     )
                 ),
+                "sources": [
+                    dict(source)
+                    for source
+                    in result.get(
+                        "sources",
+                        [],
+                    )
+                ],
                 "timings": dict(
                     result.get(
                         "timings",
@@ -470,6 +478,14 @@ class RAGService:
                         [],
                     )
                 ),
+                "sources": [
+                    dict(source)
+                    for source
+                    in result.get(
+                        "sources",
+                        [],
+                    )
+                ],
                 "timings": dict(
                     result.get(
                         "timings",
@@ -899,6 +915,62 @@ class RAGService:
 
         return passages[0], passages
 
+    @staticmethod
+    def _build_sources(
+        best_passage: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """
+        Convert the selected passage into structured citation
+        metadata consumed by the middleware and React UI.
+        """
+
+        raw_text = str(
+            best_passage.get("text", "")
+        ).strip()
+
+        normalized_text = re.sub(
+            r"\s+",
+            " ",
+            raw_text,
+        )
+
+        snippet_limit = 350
+
+        snippet = normalized_text[
+            :snippet_limit
+        ]
+
+        if len(normalized_text) > snippet_limit:
+            snippet = f"{snippet.rstrip()}..."
+
+        return [
+            {
+                "citation_id": 1,
+                "document": "CIS Controls v8",
+                "page": int(
+                    best_passage.get(
+                        "page",
+                        0,
+                    )
+                ),
+                "snippet": snippet,
+            }
+        ]
+    @staticmethod
+    def _ensure_primary_citation(
+        answer: str,
+    ) -> str:
+        cleaned_answer = answer.strip()
+
+        if not cleaned_answer:
+            return cleaned_answer
+
+        if "[1]" in cleaned_answer:
+            return cleaned_answer
+
+        return f"{cleaned_answer} [1]"
+
+
     # ============================================================
     # Prompt
     # ============================================================
@@ -912,6 +984,9 @@ class RAGService:
         system_message = """
 You are a precise extractive question-answering assistant.
 Answer only using facts explicitly written in the supplied passage.
+Add the citation [1] after every factual statement.
+Use only the citation [1].
+Do not invent other citation numbers.
 
 Rules:
 - Write a natural and complete answer.
@@ -922,7 +997,8 @@ Rules:
 - Do not claim that information is missing when it appears in the passage.
 - Do not add information that is absent from the passage.
 - Write one to three complete sentences.
-- End the answer with: Source: Page <page number>.
+- Put [1] immediately after every factual sentence.
+- Do not add a separate Source line.
 """.strip()
 
         user_message = f"""
@@ -1115,6 +1191,7 @@ Do not respond with only a frequency.
                     "page": None,
                     "context": "",
                     "retrieval_context": [],
+                    "sources": [],
                     "cache_hit": False,
                     "timings": (
                         profiler.timings
@@ -1155,6 +1232,14 @@ Do not respond with only a frequency.
                         profiler,
                     )
                 )
+                answer = (
+                    self._ensure_primary_citation(
+                        answer
+                    )
+                )
+                sources = self._build_sources(
+                    best_passage
+                )
 
                 result = {
                     "answer": answer,
@@ -1173,6 +1258,7 @@ Do not respond with only a frequency.
                         for passage
                         in ranked_passages[:3]
                     ],
+                    "sources": sources,
                     "cache_hit": False,
                     "timings": (
                         profiler.timings
@@ -1272,6 +1358,20 @@ Do not respond with only a frequency.
                         "page": cached[
                             "page"
                         ],
+                        "context": cached.get(
+                            "context",
+                            "",
+                        ),
+                        "retrieval_context": (
+                            cached.get(
+                                "retrieval_context",
+                                [],
+                            )
+                        ),
+                        "sources": cached.get(
+                            "sources",
+                            [],
+                        ),
                         "cache_hit": True,
                     },
                 }
@@ -1291,11 +1391,23 @@ Do not respond with only a frequency.
                         "page": cached[
                             "page"
                         ],
+                        "context": cached.get(
+                            "context",
+                            "",
+                        ),
+                        "retrieval_context": (
+                            cached.get(
+                                "retrieval_context",
+                                [],
+                            )
+                        ),
+                        "sources": cached.get(
+                            "sources",
+                            [],
+                        ),
                         "cache_hit": True,
                         "timings": {
-                            "cache_lookup": (
-                                elapsed
-                            ),
+                            "cache_lookup": elapsed,
                             "total": elapsed,
                         },
                     },
@@ -1333,6 +1445,20 @@ Do not respond with only a frequency.
                             "page": cached[
                                 "page"
                             ],
+                            "context": cached.get(
+                                "context",
+                                "",
+                            ),
+                            "retrieval_context": (
+                                cached.get(
+                                    "retrieval_context",
+                                    [],
+                                )
+                            ),
+                            "sources": cached.get(
+                                "sources",
+                                [],
+                            ),
                             "cache_hit": True,
                         },
                     }
@@ -1352,11 +1478,23 @@ Do not respond with only a frequency.
                             "page": cached[
                                 "page"
                             ],
+                            "context": cached.get(
+                                "context",
+                                "",
+                            ),
+                            "retrieval_context": (
+                                cached.get(
+                                    "retrieval_context",
+                                    [],
+                                )
+                            ),
+                            "sources": cached.get(
+                                "sources",
+                                [],
+                            ),
                             "cache_hit": True,
                             "timings": {
-                                "cache_lookup": (
-                                    elapsed
-                                ),
+                                "cache_lookup": elapsed,
                                 "total": elapsed,
                             },
                         },
@@ -1438,11 +1576,29 @@ Do not respond with only a frequency.
             passage_text = best_passage[
                 "text"
             ]
+            retrieval_context = [
+                (
+                    f"Page "
+                    f"{passage['page']}\n"
+                    f"{passage['text']}"
+                )
+                for passage
+                in ranked_passages[:3]
+            ]
+
+            sources = self._build_sources(
+                best_passage
+            )
 
             yield {
                 "event": "metadata",
                 "data": {
                     "page": page,
+                    "context": passage_text,
+                    "retrieval_context": (
+                        retrieval_context
+                    ),
+                    "sources": sources,
                     "cache_hit": False,
                 },
             }
@@ -1541,6 +1697,26 @@ Do not respond with only a frequency.
                 answer_parts
             ).strip()
 
+            cited_answer = (
+                self._ensure_primary_citation(
+                    final_answer
+                )
+            )
+
+            if cited_answer != final_answer:
+                citation_token = cited_answer[
+                    len(final_answer):
+                ]
+
+                final_answer = cited_answer
+
+                yield {
+                    "event": "token",
+                    "data": {
+                        "text": citation_token,
+                    },
+                }
+
             profiler.timings[
                 "total"
             ] = round(
@@ -1553,15 +1729,10 @@ Do not respond with only a frequency.
                 "answer": final_answer,
                 "page": page,
                 "context": passage_text,
-                "retrieval_context": [
-                    (
-                        f"Page "
-                        f"{passage['page']}\n"
-                        f"{passage['text']}"
-                    )
-                    for passage
-                    in ranked_passages[:3]
-                ],
+                "retrieval_context": (
+                    retrieval_context
+                ),
+                "sources": sources,
                 "cache_hit": False,
                 "timings": (
                     profiler.timings
@@ -1578,6 +1749,11 @@ Do not respond with only a frequency.
                 "event": "done",
                 "data": {
                     "page": page,
+                    "context": passage_text,
+                    "retrieval_context": (
+                        retrieval_context
+                    ),
+                    "sources": sources,
                     "cache_hit": False,
                     "timings": (
                         profiler.timings

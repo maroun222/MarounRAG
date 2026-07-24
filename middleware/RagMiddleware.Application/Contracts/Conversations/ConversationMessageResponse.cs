@@ -26,6 +26,13 @@ public sealed class ConversationMessageResponse
     public IReadOnlyList<string> RetrievalContext { get; init; } =
         Array.Empty<string>();
 
+    [JsonPropertyName("sources")]
+public IReadOnlyList<ConversationSourceResponse> Sources
+{
+    get;
+    init;
+} = Array.Empty<ConversationSourceResponse>();
+
     [JsonPropertyName("cache_hit")]
     public bool? CacheHit { get; init; }
 

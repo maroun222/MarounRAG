@@ -153,8 +153,24 @@ public async Task<ActionResult<RagQueryResponse>> Query(
                     Page = response.Page,
                     Context = response.Context,
                     RetrievalContext =
-                        response.RetrievalContext,
-                    CacheHit = response.CacheHit,
+    response.RetrievalContext,
+Sources = response.Sources
+    .Select(
+        source =>
+            new ConversationSource
+            {
+                CitationId =
+                    source.CitationId,
+                Document =
+                    source.Document,
+                Page =
+                    source.Page,
+                Snippet =
+                    source.Snippet
+            }
+    )
+    .ToArray(),
+CacheHit = response.CacheHit,
                     Timings = response.Timings,
                     CreatedAtUtc =
                         assistantMessageTime
@@ -486,8 +502,10 @@ public async Task StreamQuery(
                     Page = streamCapture.Page,
                     Context = streamCapture.Context,
                     RetrievalContext =
-                        streamCapture.RetrievalContext,
-                    CacheHit = streamCapture.CacheHit,
+    streamCapture.RetrievalContext,
+Sources =
+    streamCapture.Sources.ToArray(),
+CacheHit = streamCapture.CacheHit,
                     Timings = streamCapture.Timings,
                     CreatedAtUtc =
                         assistantMessageTime
@@ -595,6 +613,11 @@ private sealed class RagStreamCapture
     public string? Context { get; private set; }
 
     public List<string> RetrievalContext {
+        get;
+    } = [];
+
+    public List<ConversationSource> Sources
+    {
         get;
     } = [];
 
@@ -756,6 +779,17 @@ private sealed class RagStreamCapture
                 }
             }
         }
+        if (
+            element.TryGetProperty(
+                "sources",
+                out JsonElement sourcesElement
+            ) &&
+            sourcesElement.ValueKind ==
+                JsonValueKind.Array
+        )
+        {
+            CaptureSources(sourcesElement);
+        }
 
         if (
             element.TryGetProperty(
@@ -802,6 +836,103 @@ private sealed class RagStreamCapture
                         value;
                 }
             }
+        }
+    }
+    private void CaptureSources(
+        JsonElement sourcesElement
+    )
+    {
+        Sources.Clear();
+
+        foreach (
+            JsonElement sourceElement
+            in sourcesElement.EnumerateArray()
+        )
+        {
+            if (
+                sourceElement.ValueKind !=
+                JsonValueKind.Object
+            )
+            {
+                continue;
+            }
+
+            int citationId = 0;
+
+            if (
+                sourceElement.TryGetProperty(
+                    "citation_id",
+                    out JsonElement citationElement
+                ) &&
+                citationElement.ValueKind ==
+                    JsonValueKind.Number
+            )
+            {
+                citationElement.TryGetInt32(
+                    out citationId
+                );
+            }
+
+            string documentName =
+                string.Empty;
+
+            if (
+                sourceElement.TryGetProperty(
+                    "document",
+                    out JsonElement documentElement
+                ) &&
+                documentElement.ValueKind ==
+                    JsonValueKind.String
+            )
+            {
+                documentName =
+                    documentElement.GetString()
+                    ?? string.Empty;
+            }
+
+            int? page = null;
+
+            if (
+                sourceElement.TryGetProperty(
+                    "page",
+                    out JsonElement pageElement
+                ) &&
+                pageElement.ValueKind ==
+                    JsonValueKind.Number &&
+                pageElement.TryGetInt32(
+                    out int parsedPage
+                )
+            )
+            {
+                page = parsedPage;
+            }
+
+            string snippet =
+                string.Empty;
+
+            if (
+                sourceElement.TryGetProperty(
+                    "snippet",
+                    out JsonElement snippetElement
+                ) &&
+                snippetElement.ValueKind ==
+                    JsonValueKind.String
+            )
+            {
+                snippet =
+                    snippetElement.GetString()
+                    ?? string.Empty;
+            }
+
+            Sources.Add(
+                new ConversationSource
+                {
+                    CitationId = citationId,
+                    Document = documentName,
+                    Page = page,
+                    Snippet = snippet
+                }
+            );
         }
     }
 }

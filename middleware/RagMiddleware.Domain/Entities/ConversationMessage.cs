@@ -20,6 +20,12 @@ public sealed class ConversationMessage
     public IReadOnlyList<string> RetrievalContext { get; init; } =
         Array.Empty<string>();
 
+    public IReadOnlyList<ConversationSource> Sources
+    {
+        get;
+        init;
+    } = Array.Empty<ConversationSource>();
+
     public bool? CacheHit { get; init; }
 
     public IReadOnlyDictionary<string, double> Timings { get; init; } =

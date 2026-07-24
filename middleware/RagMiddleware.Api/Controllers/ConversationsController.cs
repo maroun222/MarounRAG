@@ -324,6 +324,25 @@ public sealed class ConversationsController : ControllerBase
             Page = message.Page,
             Context = message.Context,
             RetrievalContext = message.RetrievalContext,
+            Sources = message.Sources
+    .Select(
+        source =>
+            new ConversationSourceResponse
+            {
+                CitationId =
+                    source.CitationId,
+
+                Document =
+                    source.Document,
+
+                Page =
+                    source.Page,
+
+                Snippet =
+                    source.Snippet
+            }
+    )
+    .ToArray(),
             CacheHit = message.CacheHit,
             Timings = message.Timings,
             CreatedAtUtc = message.CreatedAtUtc

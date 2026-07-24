@@ -31,6 +31,13 @@ public sealed class ConversationMessageDocument
     [BsonElement("retrieval_context")]
     public List<string> RetrievalContext { get; set; } = [];
 
+    [BsonElement("sources")]
+    public List<ConversationSourceDocument> Sources
+    {
+        get;
+        set;
+    } = [];
+
     [BsonElement("cache_hit")]
     [BsonIgnoreIfNull]
     public bool? CacheHit { get; set; }

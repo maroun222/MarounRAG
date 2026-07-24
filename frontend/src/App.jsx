@@ -73,10 +73,13 @@ function mapPersistedMessages(conversation) {
     meta: {
       page: message.page ?? null,
       context: message.context ?? null,
-      retrievalContext:
-        message.retrieval_context ?? [],
-      cacheHit: message.cache_hit ?? false,
-      timings: message.timings ?? null,
+    retrievalContext:
+      message.retrieval_context ?? [],
+    sources:
+      message.sources ?? [],
+    cacheHit:
+      message.cache_hit ?? false,
+    timings: message.timings ?? null,
     },
   }));
 }
@@ -412,6 +415,7 @@ export default function App() {
         page: null,
         context: null,
         retrievalContext: [],
+        sources: [],
         cacheHit: false,
         timings: null,
       },
@@ -501,6 +505,8 @@ export default function App() {
                 retrievalContext:
                   data.retrieval_context ??
                   [],
+                sources:
+                  data.sources ?? [],
                 cacheHit:
                   data.cache_hit ?? false,
               },
@@ -533,6 +539,13 @@ export default function App() {
               meta: {
                 page:
                   data.page ?? undefined,
+                context:
+                  data.context ?? undefined,
+                retreivalContext:
+                  data.retreival_context ??
+                  undefined,
+                sources:
+                  data.sources ?? undefined,
                 cacheHit:
                   data.cache_hit ??
                   undefined,

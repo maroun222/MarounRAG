@@ -27,6 +27,9 @@ class ChatResponse(BaseModel):
     page: int | None
     context: str
     retrieval_context: list[str]
+    sources: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
     cache_hit: bool
     timings: dict[str, float]
 

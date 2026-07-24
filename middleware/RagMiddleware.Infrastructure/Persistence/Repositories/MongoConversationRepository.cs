@@ -278,51 +278,93 @@ public sealed class MongoConversationRepository
     }
 
     private static ConversationMessageDocument
-        ToMessageDocument(
-            ConversationMessage message
-        )
+    ToMessageDocument(
+        ConversationMessage message
+    )
+{
+    return new ConversationMessageDocument
     {
-        return new ConversationMessageDocument
-        {
-            Id = message.Id,
-            ConversationId = message.ConversationId,
-            UserId = message.UserId,
-            Role = message.Role,
-            Content = message.Content,
-            Page = message.Page,
-            Context = message.Context,
-            RetrievalContext =
-                message.RetrievalContext.ToList(),
-            CacheHit = message.CacheHit,
-            Timings =
-                new Dictionary<string, double>(
-                    message.Timings
-                ),
-            CreatedAtUtc = message.CreatedAtUtc
-        };
-    }
+        Id = message.Id,
+        ConversationId = message.ConversationId,
+        UserId = message.UserId,
+        Role = message.Role,
+        Content = message.Content,
+        Page = message.Page,
+        Context = message.Context,
+
+        RetrievalContext =
+            message.RetrievalContext.ToList(),
+
+        Sources = message.Sources
+            .Select(
+                source =>
+                    new ConversationSourceDocument
+                    {
+                        CitationId =
+                            source.CitationId,
+                        Document =
+                            source.Document,
+                        Page =
+                            source.Page,
+                        Snippet =
+                            source.Snippet
+                    }
+            )
+            .ToList(),
+
+        CacheHit = message.CacheHit,
+
+        Timings =
+            new Dictionary<string, double>(
+                message.Timings
+            ),
+
+        CreatedAtUtc = message.CreatedAtUtc
+    };
+}
 
     private static ConversationMessage ToMessage(
-        ConversationMessageDocument document
-    )
+    ConversationMessageDocument document
+)
+{
+    return new ConversationMessage
     {
-        return new ConversationMessage
-        {
-            Id = document.Id,
-            ConversationId = document.ConversationId,
-            UserId = document.UserId,
-            Role = document.Role,
-            Content = document.Content,
-            Page = document.Page,
-            Context = document.Context,
-            RetrievalContext =
-                document.RetrievalContext.ToArray(),
-            CacheHit = document.CacheHit,
-            Timings =
-                new Dictionary<string, double>(
-                    document.Timings
-                ),
-            CreatedAtUtc = document.CreatedAtUtc
-        };
-    }
+        Id = document.Id,
+        ConversationId = document.ConversationId,
+        UserId = document.UserId,
+        Role = document.Role,
+        Content = document.Content,
+        Page = document.Page,
+        Context = document.Context,
+
+        RetrievalContext =
+            document.RetrievalContext.ToArray(),
+
+        Sources = document.Sources
+            .Select(
+                source =>
+                    new ConversationSource
+                    {
+                        CitationId =
+                            source.CitationId,
+                        Document =
+                            source.Document,
+                        Page =
+                            source.Page,
+                        Snippet =
+                            source.Snippet
+                    }
+            )
+            .ToArray(),
+
+        CacheHit = document.CacheHit,
+
+        Timings =
+            new Dictionary<string, double>(
+                document.Timings
+            ),
+
+        CreatedAtUtc = document.CreatedAtUtc
+    };
+}
 }
