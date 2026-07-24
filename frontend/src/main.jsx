@@ -1,16 +1,26 @@
-import { StrictMode } from "react"
-import { createRoot } from "react-dom/client"
+import {
+  StrictMode,
+} from "react";
 
-import App from "./App.jsx"
-import "./index.css"
+import {
+  createRoot,
+} from "react-dom/client";
 
-import { TooltipProvider } from "@/components/ui/tooltip"
+import App from "./App.jsx";
+import AuthGate from "./components/AuthGate.jsx";
+import GuidedTour from "./components/GuidedTour.jsx";
+
+import "./index.css";
 
 
-createRoot(document.getElementById("root")).render(
+createRoot(
+  document.getElementById("root"),
+).render(
   <StrictMode>
-    <TooltipProvider>
-      <App />
-    </TooltipProvider>
+    <AuthGate>
+      <GuidedTour>
+        <App />
+      </GuidedTour>
+    </AuthGate>
   </StrictMode>,
-)
+);

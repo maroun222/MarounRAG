@@ -14,5 +14,10 @@ public sealed class RagQueryRequest
         MinimumLength = 1
     )]
     [JsonPropertyName("message")]
-    public string Message { get; init; } = string.Empty;
+    public string Message { get; init; } =
+        string.Empty;
+
+    [JsonPropertyName("use_cache")]
+    public bool UseCache { get; init; } =
+        true;
 }

@@ -21,6 +21,8 @@ class ChatRequest(BaseModel):
         max_length=2000,
     )
 
+    use_cache: bool = True
+
 
 class ChatResponse(BaseModel):
     answer: str
@@ -151,7 +153,8 @@ def chat(
 
     try:
         return rag_service.answer_question(
-            request_body.message
+            request_body.message,
+            use_cache=request_body.use_cache,
         )
 
     except ValueError as error:
@@ -204,7 +207,8 @@ def chat_stream(
         try:
             for item in (
                 rag_service.stream_answer_question(
-                    request_body.message
+                    request_body.message,
+                    use_cache=request_body.use_cache,
                 )
             ):
                 yield format_sse(

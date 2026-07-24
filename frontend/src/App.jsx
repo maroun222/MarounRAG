@@ -22,6 +22,11 @@ import {
   listConversations,
 } from "./services/conversationService";
 
+import {
+  listConversationFeedback,
+  submitFeedback,
+} from "./services/feedbackService";
+
 
 const SELECTED_CONVERSATION_KEY =
   "cis-rag-selected-conversation";
@@ -40,12 +45,16 @@ const welcomeMessage = {
 function makeId() {
   return (
     `${Date.now()}-` +
-    Math.random().toString(16).slice(2)
+    Math.random()
+      .toString(16)
+      .slice(2)
   );
 }
 
 
-function makeConversationTitle(question) {
+function makeConversationTitle(
+  question,
+) {
   const normalized = question
     .replace(/\s+/g, " ")
     .trim();
@@ -54,102 +63,209 @@ function makeConversationTitle(question) {
     return normalized;
   }
 
-  return `${normalized.slice(0, 57)}...`;
+  return `${normalized.slice(
+    0,
+    57,
+  )}...`;
 }
 
 
-function mapPersistedMessages(conversation) {
+function mapPersistedMessages(
+  conversation,
+) {
   const persistedMessages =
     conversation?.messages ?? [];
 
-  if (persistedMessages.length === 0) {
+  if (
+    persistedMessages.length ===
+    0
+  ) {
     return [welcomeMessage];
   }
 
-  return persistedMessages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    meta: {
-      page: message.page ?? null,
-      context: message.context ?? null,
-    retrievalContext:
-      message.retrieval_context ?? [],
-    sources:
-      message.sources ?? [],
-    cacheHit:
-      message.cache_hit ?? false,
-    timings: message.timings ?? null,
-    },
-  }));
+  return persistedMessages.map(
+    (message) => ({
+      id: message.id,
+
+      role:
+        message.role,
+
+      content:
+        message.content,
+
+      error:
+        false,
+
+      meta: {
+        page:
+          message.page ??
+          null,
+
+        context:
+          message.context ??
+          null,
+
+        retrievalContext:
+          message.retrieval_context ??
+          [],
+
+        sources:
+          message.sources ??
+          [],
+
+        cacheHit:
+          message.cache_hit ??
+          false,
+
+        timings:
+          message.timings ??
+          null,
+      },
+    }),
+  );
+}
+
+
+function mapFeedbackItems(
+  feedbackItems,
+) {
+  const feedbackMap = {};
+
+  for (
+    const feedback
+    of feedbackItems ?? []
+  ) {
+    if (
+      feedback?.message_id &&
+      feedback?.rating
+    ) {
+      feedbackMap[
+        feedback.message_id
+      ] = feedback.rating;
+    }
+  }
+
+  return feedbackMap;
 }
 
 
 export default function App() {
-  const [messages, setMessages] = useState([
+  const [
+    messages,
+    setMessages,
+  ] = useState([
     welcomeMessage,
   ]);
 
-  const [input, setInput] = useState("");
+  const [
+    input,
+    setInput,
+  ] = useState("");
 
-  const [loading, setLoading] = useState(false);
-  const [streaming, setStreaming] =
-    useState(false);
+  const [
+    loading,
+    setLoading,
+  ] = useState(false);
+
+  const [
+    streaming,
+    setStreaming,
+  ] = useState(false);
 
   const [
     conversationLoading,
     setConversationLoading,
   ] = useState(false);
 
-  const [thinkingStatus, setThinkingStatus] =
-    useState("");
+  const [
+    thinkingStatus,
+    setThinkingStatus,
+  ] = useState("");
 
-  const [backendStatus, setBackendStatus] =
-    useState("checking");
+  const [
+    backendStatus,
+    setBackendStatus,
+  ] = useState(
+    "checking",
+  );
 
-  const [conversations, setConversations] =
-    useState([]);
+  const [
+    conversations,
+    setConversations,
+  ] = useState([]);
 
   const [
     selectedConversationId,
     setSelectedConversationId,
   ] = useState(null);
 
-  const [historyLoading, setHistoryLoading] =
-    useState(true);
+  const [
+    historyLoading,
+    setHistoryLoading,
+  ] = useState(true);
 
-  const [historyError, setHistoryError] =
-    useState("");
+  const [
+    historyError,
+    setHistoryError,
+  ] = useState("");
 
-  const viewportRef = useRef(null);
-  const activeRequestRef = useRef(null);
+  const [
+    feedbackByMessage,
+    setFeedbackByMessage,
+  ] = useState({});
+
+  const [
+    feedbackSubmittingMessageId,
+    setFeedbackSubmittingMessageId,
+  ] = useState(null);
+
+  const [
+    feedbackErrorsByMessage,
+    setFeedbackErrorsByMessage,
+  ] = useState({});
+
+  const viewportRef =
+    useRef(null);
+
+  const activeRequestRef =
+    useRef(null);
 
 
   // =========================================================
-  // Initial health and history loading
+  // Initial health check and conversation loading
   // =========================================================
 
   useEffect(() => {
-    const controller = new AbortController();
+    const controller =
+      new AbortController();
 
     async function initialize() {
-      const healthy = await checkHealth();
-
-      if (!healthy) {
-        setBackendStatus("offline");
-        setHistoryLoading(false);
-        return;
-      }
-
-      setBackendStatus("online");
-
       try {
+        const isHealthy =
+          await checkHealth();
+
+        setBackendStatus(
+          isHealthy
+            ? "online"
+            : "offline",
+        );
+
+        if (!isHealthy) {
+          setHistoryLoading(
+            false,
+          );
+
+          return;
+        }
+
         const conversationList =
           await listConversations(
             controller.signal,
           );
 
-        setConversations(conversationList);
+        setConversations(
+          conversationList,
+        );
 
         const storedConversationId =
           localStorage.getItem(
@@ -164,7 +280,9 @@ export default function App() {
               storedConversationId,
           );
 
-        if (!storedConversationExists) {
+        if (
+          !storedConversationExists
+        ) {
           localStorage.removeItem(
             SELECTED_CONVERSATION_KEY,
           );
@@ -172,13 +290,24 @@ export default function App() {
           return;
         }
 
-        setConversationLoading(true);
+        setConversationLoading(
+          true,
+        );
 
-        const savedConversation =
-          await getConversation(
+        const [
+          savedConversation,
+          savedFeedback,
+        ] = await Promise.all([
+          getConversation(
             storedConversationId,
             controller.signal,
-          );
+          ),
+
+          listConversationFeedback(
+            storedConversationId,
+            controller.signal,
+          ),
+        ]);
 
         setSelectedConversationId(
           storedConversationId,
@@ -189,16 +318,30 @@ export default function App() {
             savedConversation,
           ),
         );
+
+        setFeedbackByMessage(
+          mapFeedbackItems(
+            savedFeedback,
+          ),
+        );
       } catch (error) {
-        if (error?.name !== "AbortError") {
+        if (
+          error?.name !==
+          "AbortError"
+        ) {
           setHistoryError(
             error?.message ||
               "Unable to load saved conversations.",
           );
         }
       } finally {
-        setHistoryLoading(false);
-        setConversationLoading(false);
+        setHistoryLoading(
+          false,
+        );
+
+        setConversationLoading(
+          false,
+        );
       }
     }
 
@@ -211,19 +354,25 @@ export default function App() {
 
 
   // =========================================================
-  // Auto-scroll
+  // Auto-scroll when messages change
   // =========================================================
 
   useEffect(() => {
-    const viewport = viewportRef.current;
+    const viewport =
+      viewportRef.current;
 
     if (!viewport) {
       return;
     }
 
     viewport.scrollTo({
-      top: viewport.scrollHeight,
-      behavior: streaming ? "auto" : "smooth",
+      top:
+        viewport.scrollHeight,
+
+      behavior:
+        streaming
+          ? "auto"
+          : "smooth",
     });
   }, [
     messages,
@@ -234,12 +383,13 @@ export default function App() {
 
 
   // =========================================================
-  // Abort active request on unmount
+  // Cancel active request when the component unmounts
   // =========================================================
 
   useEffect(() => {
     return () => {
-      activeRequestRef.current?.abort();
+      activeRequestRef.current
+        ?.abort();
     };
   }, []);
 
@@ -248,24 +398,34 @@ export default function App() {
   // Message helpers
   // =========================================================
 
-  function updateMessage(messageId, updates) {
-    setMessages((currentMessages) =>
-      currentMessages.map((message) => {
-        if (message.id !== messageId) {
-          return message;
-        }
+  function updateMessage(
+    messageId,
+    updates,
+  ) {
+    setMessages(
+      (currentMessages) =>
+        currentMessages.map(
+          (message) => {
+            if (
+              message.id !==
+              messageId
+            ) {
+              return message;
+            }
 
-        return {
-          ...message,
-          ...updates,
-          meta: updates.meta
-            ? {
-                ...message.meta,
-                ...updates.meta,
-              }
-            : message.meta,
-        };
-      }),
+            return {
+              ...message,
+              ...updates,
+
+              meta: updates.meta
+                ? {
+                    ...message.meta,
+                    ...updates.meta,
+                  }
+                : message.meta,
+            };
+          },
+        ),
     );
   }
 
@@ -278,18 +438,28 @@ export default function App() {
       return;
     }
 
-    setMessages((currentMessages) =>
-      currentMessages.map((message) => {
-        if (message.id !== messageId) {
-          return message;
-        }
+    setMessages(
+      (currentMessages) =>
+        currentMessages.map(
+          (message) => {
+            if (
+              message.id !==
+              messageId
+            ) {
+              return message;
+            }
 
-        return {
-          ...message,
-          content:
-            `${message.content || ""}${token}`,
-        };
-      }),
+            return {
+              ...message,
+
+              content:
+                `${
+                  message.content ||
+                  ""
+                }${token}`,
+            };
+          },
+        ),
     );
   }
 
@@ -299,7 +469,10 @@ export default function App() {
       const conversationList =
         await listConversations();
 
-      setConversations(conversationList);
+      setConversations(
+        conversationList,
+      );
+
       setHistoryError("");
     } catch (error) {
       setHistoryError(
@@ -307,6 +480,36 @@ export default function App() {
           "Unable to refresh conversations.",
       );
     }
+  }
+
+
+  async function reloadConversation(
+    conversationId,
+  ) {
+    const [
+      savedConversation,
+      savedFeedback,
+    ] = await Promise.all([
+      getConversation(
+        conversationId,
+      ),
+
+      listConversationFeedback(
+        conversationId,
+      ),
+    ]);
+
+    setMessages(
+      mapPersistedMessages(
+        savedConversation,
+      ),
+    );
+
+    setFeedbackByMessage(
+      mapFeedbackItems(
+        savedFeedback,
+      ),
+    );
   }
 
 
@@ -326,14 +529,29 @@ export default function App() {
       return;
     }
 
-    activeRequestRef.current?.abort();
+    activeRequestRef.current
+      ?.abort();
 
-    setConversationLoading(true);
+    setConversationLoading(
+      true,
+    );
+
     setHistoryError("");
+    setFeedbackErrorsByMessage({});
 
     try {
-      const conversation =
-        await getConversation(conversationId);
+      const [
+        conversation,
+        savedFeedback,
+      ] = await Promise.all([
+        getConversation(
+          conversationId,
+        ),
+
+        listConversationFeedback(
+          conversationId,
+        ),
+      ]);
 
       setSelectedConversationId(
         conversationId,
@@ -345,7 +563,15 @@ export default function App() {
       );
 
       setMessages(
-        mapPersistedMessages(conversation),
+        mapPersistedMessages(
+          conversation,
+        ),
+      );
+
+      setFeedbackByMessage(
+        mapFeedbackItems(
+          savedFeedback,
+        ),
       );
 
       setInput("");
@@ -356,21 +582,38 @@ export default function App() {
           "Unable to load the conversation.",
       );
     } finally {
-      setConversationLoading(false);
+      setConversationLoading(
+        false,
+      );
     }
   }
 
 
   function startNewConversation() {
-    activeRequestRef.current?.abort();
-    activeRequestRef.current = null;
+    activeRequestRef.current
+      ?.abort();
+
+    activeRequestRef.current =
+      null;
 
     localStorage.removeItem(
       SELECTED_CONVERSATION_KEY,
     );
 
-    setSelectedConversationId(null);
-    setMessages([welcomeMessage]);
+    setSelectedConversationId(
+      null,
+    );
+
+    setMessages([
+      welcomeMessage,
+    ]);
+
+    setFeedbackByMessage({});
+    setFeedbackErrorsByMessage({});
+    setFeedbackSubmittingMessageId(
+      null,
+    );
+
     setInput("");
     setLoading(false);
     setStreaming(false);
@@ -379,14 +622,18 @@ export default function App() {
 
 
   // =========================================================
-  // Submit RAG question
+  // Submit a RAG question
   // =========================================================
 
   async function submitQuestion(
     questionOverride,
+    {
+      useCache = true,
+    } = {},
   ) {
     const question = (
-      questionOverride ?? input
+      questionOverride ??
+      input
     ).trim();
 
     if (
@@ -394,61 +641,101 @@ export default function App() {
       loading ||
       streaming ||
       conversationLoading ||
-      backendStatus !== "online"
+      backendStatus !==
+        "online"
     ) {
       return;
     }
 
     const userMessage = {
-      id: makeId(),
-      role: "user",
-      content: question,
+      id:
+        makeId(),
+
+      role:
+        "user",
+
+      content:
+        question,
     };
 
-    const assistantMessageId = makeId();
+    const assistantMessageId =
+      makeId();
 
     const assistantMessage = {
-      id: assistantMessageId,
-      role: "assistant",
-      content: "",
+      id:
+        assistantMessageId,
+
+      role:
+        "assistant",
+
+      content:
+        "",
+
+      error:
+        false,
+
       meta: {
-        page: null,
-        context: null,
-        retrievalContext: [],
-        sources: [],
-        cacheHit: false,
-        timings: null,
+        page:
+          null,
+
+        context:
+          null,
+
+        retrievalContext:
+          [],
+
+        sources:
+          [],
+
+        cacheHit:
+          false,
+
+        timings:
+          null,
       },
     };
 
-    setMessages((currentMessages) => [
-      ...currentMessages,
-      userMessage,
-      assistantMessage,
-    ]);
+    setMessages(
+      (currentMessages) => [
+        ...currentMessages,
+        userMessage,
+        assistantMessage,
+      ],
+    );
 
     setInput("");
     setLoading(true);
+
     setThinkingStatus(
       selectedConversationId
         ? "Connecting to the RAG backend..."
         : "Creating a new conversation...",
     );
 
-    const controller = new AbortController();
-    activeRequestRef.current = controller;
+    const controller =
+      new AbortController();
 
-    let streamErrorHandled = false;
-    let streamCompleted = false;
+    activeRequestRef.current =
+      controller;
+
+    let streamErrorHandled =
+      false;
+
+    let streamCompleted =
+      false;
 
     let activeConversationId =
       selectedConversationId;
 
     try {
-      if (!activeConversationId) {
+      if (
+        !activeConversationId
+      ) {
         const createdConversation =
           await createConversation(
-            makeConversationTitle(question),
+            makeConversationTitle(
+              question,
+            ),
             controller.signal,
           );
 
@@ -465,8 +752,11 @@ export default function App() {
         );
 
         setConversations(
-          (currentConversations) => [
+          (
+            currentConversations,
+          ) => [
             createdConversation,
+
             ...currentConversations.filter(
               (conversation) =>
                 conversation.id !==
@@ -477,164 +767,205 @@ export default function App() {
       }
 
       setStreaming(true);
+
       setThinkingStatus(
-        "Connecting to the RAG backend...",
+        useCache
+          ? "Connecting to the RAG backend..."
+          : "Regenerating the answer...",
       );
 
-      await streamChatMessage(question, {
-        conversationId:
-          activeConversationId,
+      await streamChatMessage(
+        question,
+        {
+          conversationId:
+            activeConversationId,
 
-        signal: controller.signal,
+          useCache,
 
-        onStatus: (data) => {
-          setThinkingStatus(
-            data.message ||
-              "Processing your question...",
-          );
-        },
+          signal:
+            controller.signal,
 
-        onMetadata: (data) => {
-          updateMessage(
-            assistantMessageId,
-            {
-              meta: {
-                page: data.page ?? null,
-                context:
-                  data.context ?? null,
-                retrievalContext:
-                  data.retrieval_context ??
-                  [],
-                sources:
-                  data.sources ?? [],
-                cacheHit:
-                  data.cache_hit ?? false,
+          onStatus: (data) => {
+            setThinkingStatus(
+              data.message ||
+                "Processing your question...",
+            );
+          },
+
+          onMetadata: (
+            data,
+          ) => {
+            updateMessage(
+              assistantMessageId,
+              {
+                meta: {
+                  page:
+                    data.page ??
+                    null,
+
+                  context:
+                    data.context ??
+                    null,
+
+                  retrievalContext:
+                    data.retrieval_context ??
+                    [],
+
+                  sources:
+                    data.sources ??
+                    [],
+
+                  cacheHit:
+                    data.cache_hit ??
+                    false,
+                },
               },
-            },
-          );
-        },
+            );
+          },
 
-        onToken: (data) => {
-          const token = data.text ?? "";
+          onToken: (data) => {
+            const token =
+              data.text ?? "";
 
-          if (!token) {
-            return;
-          }
+            if (!token) {
+              return;
+            }
 
-          setLoading(false);
-          setThinkingStatus("");
+            setLoading(false);
+            setThinkingStatus("");
 
-          appendAssistantToken(
-            assistantMessageId,
-            token,
-          );
-        },
+            appendAssistantToken(
+              assistantMessageId,
+              token,
+            );
+          },
 
-        onDone: (data) => {
-          streamCompleted = true;
+          onDone: (data) => {
+            streamCompleted =
+              true;
 
-          updateMessage(
-            assistantMessageId,
-            {
-              meta: {
-                page:
-                  data.page ?? undefined,
-                context:
-                  data.context ?? undefined,
-                retreivalContext:
-                  data.retreival_context ??
-                  undefined,
-                sources:
-                  data.sources ?? undefined,
-                cacheHit:
-                  data.cache_hit ??
-                  undefined,
-                timings:
-                  data.timings ?? null,
+            updateMessage(
+              assistantMessageId,
+              {
+                meta: {
+                  page:
+                    data.page ??
+                    undefined,
+
+                  context:
+                    data.context ??
+                    undefined,
+
+                  retrievalContext:
+                    data.retrieval_context ??
+                    undefined,
+
+                  sources:
+                    data.sources ??
+                    undefined,
+
+                  cacheHit:
+                    data.cache_hit ??
+                    undefined,
+
+                  timings:
+                    data.timings ??
+                    null,
+                },
               },
-            },
-          );
+            );
 
-          setThinkingStatus("");
-          setLoading(false);
-          setStreaming(false);
+            setThinkingStatus("");
+            setLoading(false);
+            setStreaming(false);
+          },
+
+          onError: (data) => {
+            streamErrorHandled =
+              true;
+
+            updateMessage(
+              assistantMessageId,
+              {
+                content:
+                  data.message ||
+                  "An error occurred while generating the answer.",
+
+                error:
+                  true,
+              },
+            );
+
+            setThinkingStatus("");
+            setLoading(false);
+            setStreaming(false);
+          },
         },
-
-        onError: (data) => {
-          streamErrorHandled = true;
-
-          updateMessage(
-            assistantMessageId,
-            {
-              content:
-                data.message ||
-                "An error occurred while generating the answer.",
-              error: true,
-            },
-          );
-
-          setThinkingStatus("");
-          setLoading(false);
-          setStreaming(false);
-        },
-      });
+      );
 
       /*
-       * After the stream closes, the middleware has completed
-       * MongoDB persistence. Reload the authoritative messages.
+       * Reload the persisted conversation after the stream
+       * completes so MongoDB becomes the source of truth.
        */
       if (
         streamCompleted &&
         activeConversationId
       ) {
         try {
-          const savedConversation =
-            await getConversation(
-              activeConversationId,
-            );
-
-          setMessages(
-            mapPersistedMessages(
-              savedConversation,
-            ),
+          await reloadConversation(
+            activeConversationId,
           );
         } catch {
           /*
-           * Keep the already-streamed UI messages if the
-           * history reload fails.
+           * Keep the streamed messages visible if the
+           * conversation reload fails.
            */
         }
 
         await refreshConversationList();
       }
     } catch (error) {
-      if (error?.name === "AbortError") {
+      if (
+        error?.name ===
+        "AbortError"
+      ) {
         return;
       }
 
-      if (!streamErrorHandled) {
+      if (
+        !streamErrorHandled
+      ) {
         updateMessage(
           assistantMessageId,
           {
             content:
               error?.message ||
               "Unable to reach the RAG backend.",
-            error: true,
+
+            error:
+              true,
           },
         );
       }
 
       if (
-        error instanceof TypeError ||
-        error?.message?.includes("connect") ||
+        error instanceof
+          TypeError ||
+        error?.message?.includes(
+          "connect",
+        ) ||
         error?.message?.includes(
           "Failed to fetch",
         )
       ) {
-        setBackendStatus("offline");
+        setBackendStatus(
+          "offline",
+        );
       }
     } finally {
-      activeRequestRef.current = null;
+      activeRequestRef.current =
+        null;
+
       setLoading(false);
       setStreaming(false);
       setThinkingStatus("");
@@ -642,9 +973,135 @@ export default function App() {
   }
 
 
+  // =========================================================
+  // Regenerate an assistant answer
+  // =========================================================
+
+  function regenerateAnswer(
+    assistantMessageId,
+  ) {
+    if (
+      loading ||
+      streaming ||
+      conversationLoading
+    ) {
+      return;
+    }
+
+    const assistantIndex =
+      messages.findIndex(
+        (message) =>
+          message.id ===
+          assistantMessageId,
+      );
+
+    if (
+      assistantIndex <= 0
+    ) {
+      return;
+    }
+
+    for (
+      let index =
+        assistantIndex - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const previousMessage =
+        messages[index];
+
+      if (
+        previousMessage.role ===
+          "user" &&
+        previousMessage.content
+      ) {
+        submitQuestion(
+          previousMessage.content,
+          {
+            useCache:
+              false,
+          },
+        );
+
+        return;
+      }
+    }
+  }
+
+
+  // =========================================================
+  // Submit helpful or not-helpful feedback
+  // =========================================================
+
+  async function handleFeedback(
+    messageId,
+    rating,
+  ) {
+    if (
+      !selectedConversationId ||
+      !messageId ||
+      feedbackSubmittingMessageId ||
+      loading ||
+      streaming ||
+      conversationLoading
+    ) {
+      return;
+    }
+
+    setFeedbackSubmittingMessageId(
+      messageId,
+    );
+
+    setFeedbackErrorsByMessage(
+      (currentErrors) => ({
+        ...currentErrors,
+        [messageId]:
+          "",
+      }),
+    );
+
+    try {
+      const savedFeedback =
+        await submitFeedback({
+          conversationId:
+            selectedConversationId,
+
+          messageId,
+
+          rating,
+        });
+
+      setFeedbackByMessage(
+        (currentFeedback) => ({
+          ...currentFeedback,
+
+          [messageId]:
+            savedFeedback.rating ??
+            rating,
+        }),
+      );
+    } catch (error) {
+      setFeedbackErrorsByMessage(
+        (currentErrors) => ({
+          ...currentErrors,
+
+          [messageId]:
+            error?.message ||
+            "Unable to save feedback.",
+        }),
+      );
+    } finally {
+      setFeedbackSubmittingMessageId(
+        null,
+      );
+    }
+  }
+
+
   const showSuggestions =
     messages.length === 1 &&
-    messages[0].id === welcomeMessage.id;
+    messages[0].id ===
+      welcomeMessage.id;
 
   const requestInProgress =
     loading ||
@@ -667,14 +1124,24 @@ export default function App() {
 
       <div className="relative z-10 flex min-h-screen w-full">
         <ConversationSidebar
-          conversations={conversations}
+          conversations={
+            conversations
+          }
           selectedConversationId={
             selectedConversationId
           }
-          loading={historyLoading}
-          error={historyError}
-          disabled={requestInProgress}
-          onSelect={openConversation}
+          loading={
+            historyLoading
+          }
+          error={
+            historyError
+          }
+          disabled={
+            requestInProgress
+          }
+          onSelect={
+            openConversation
+          }
           onNewConversation={
             startNewConversation
           }
@@ -682,30 +1149,87 @@ export default function App() {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <ChatHeader
-            backendStatus={backendStatus}
-            onClear={startNewConversation}
+            backendStatus={
+              backendStatus
+            }
+            onClear={
+              startNewConversation
+            }
           />
 
           <main
-            ref={viewportRef}
+            ref={
+              viewportRef
+            }
             className="min-h-0 flex-1 overflow-y-auto"
           >
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
-              {messages.map((message) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
-                  streaming={
-                    streaming &&
-                    message.role ===
-                      "assistant" &&
-                    message.id ===
-                      messages[
-                        messages.length - 1
-                      ]?.id
-                  }
-                />
-              ))}
+              {messages.map(
+                (message) => (
+                  <ChatMessage
+                    key={
+                      message.id
+                    }
+                    message={
+                      message
+                    }
+                    onRegenerate={
+                      message.role ===
+                        "assistant" &&
+                      message.id !==
+                        "welcome" &&
+                      !message.error
+                        ? () =>
+                            regenerateAnswer(
+                              message.id,
+                            )
+                        : undefined
+                    }
+                    onFeedback={
+                      message.role ===
+                        "assistant" &&
+                      message.id !==
+                        "welcome" &&
+                      !message.error
+                        ? (
+                            rating,
+                          ) =>
+                            handleFeedback(
+                              message.id,
+                              rating,
+                            )
+                        : undefined
+                    }
+                    feedbackRating={
+                      feedbackByMessage[
+                        message.id
+                      ] ?? null
+                    }
+                    feedbackSubmitting={
+                      feedbackSubmittingMessageId ===
+                      message.id
+                    }
+                    feedbackError={
+                      feedbackErrorsByMessage[
+                        message.id
+                      ] ?? ""
+                    }
+                    actionsDisabled={
+                      requestInProgress
+                    }
+                    streaming={
+                      streaming &&
+                      message.role ===
+                        "assistant" &&
+                      message.id ===
+                        messages[
+                          messages.length -
+                            1
+                        ]?.id
+                    }
+                  />
+                ),
+              )}
 
               {showSuggestions && (
                 <SuggestionCards
@@ -714,31 +1238,44 @@ export default function App() {
                       "online" ||
                     requestInProgress
                   }
-                  onSelect={submitQuestion}
+                  onSelect={
+                    submitQuestion
+                  }
                 />
               )}
 
               {conversationLoading && (
-                <TypingIndicator status="Loading conversation..." />
+                <TypingIndicator
+                  status="Loading conversation..."
+                />
               )}
 
               {loading && (
                 <TypingIndicator
-                  status={thinkingStatus}
+                  status={
+                    thinkingStatus
+                  }
                 />
               )}
             </div>
           </main>
 
           <ChatInput
-            value={input}
-            onChange={setInput}
+            value={
+              input
+            }
+            onChange={
+              setInput
+            }
             onSubmit={() =>
               submitQuestion()
             }
-            loading={requestInProgress}
+            loading={
+              requestInProgress
+            }
             backendOnline={
-              backendStatus === "online"
+              backendStatus ===
+              "online"
             }
           />
         </div>
