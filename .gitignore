@@ -27,6 +27,8 @@ node_modules/
 ############
 .env.local
 
+**/bin/
+**/obj/
 # Environment variables / secrets
 .env
 .env.*
