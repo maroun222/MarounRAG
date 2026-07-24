@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using RagMiddleware.Application.Abstractions;
+using RagMiddleware.Application.Abstractions.Persistence;
 using RagMiddleware.Application.Contracts;
+using RagMiddleware.Domain.Entities;
 
 namespace RagMiddleware.Api.Controllers;
 
@@ -8,15 +10,23 @@ namespace RagMiddleware.Api.Controllers;
 [Route("api/rag")]
 public sealed class RagController : ControllerBase
 {
+    private const string UserIdHeaderName = "X-User-Id";
+
     private readonly IRagApiClient _ragApiClient;
+
+    private readonly IConversationRepository
+        _conversationRepository;
+
     private readonly ILogger<RagController> _logger;
 
     public RagController(
         IRagApiClient ragApiClient,
+        IConversationRepository conversationRepository,
         ILogger<RagController> logger
     )
     {
         _ragApiClient = ragApiClient;
+        _conversationRepository = conversationRepository;
         _logger = logger;
     }
 
@@ -25,66 +35,190 @@ public sealed class RagController : ControllerBase
     // ========================================================
 
     [HttpPost("query")]
-    [ProducesResponseType<RagQueryResponse>(
-        StatusCodes.Status200OK
-    )]
-    [ProducesResponseType(
-        StatusCodes.Status502BadGateway
-    )]
-    [ProducesResponseType(
-        StatusCodes.Status504GatewayTimeout
-    )]
-    public async Task<ActionResult<RagQueryResponse>> Query(
-        [FromBody] RagQueryRequest request,
-        CancellationToken cancellationToken
-    )
+[ProducesResponseType<RagQueryResponse>(
+    StatusCodes.Status200OK
+)]
+[ProducesResponseType(
+    StatusCodes.Status401Unauthorized
+)]
+[ProducesResponseType(
+    StatusCodes.Status404NotFound
+)]
+[ProducesResponseType(
+    StatusCodes.Status502BadGateway
+)]
+[ProducesResponseType(
+    StatusCodes.Status504GatewayTimeout
+)]
+public async Task<ActionResult<RagQueryResponse>> Query(
+    [FromBody] RagQueryRequest request,
+    CancellationToken cancellationToken
+)
+{
+    string? userId = null;
+
+    string? conversationId =
+        request.ConversationId?.Trim();
+
+    /*
+     * Validate conversation ownership before calling the
+     * Python API, but do not save anything yet.
+     */
+    if (!string.IsNullOrWhiteSpace(conversationId))
     {
-        try
-        {
-            RagQueryResponse response =
-                await _ragApiClient.QueryAsync(
-                    request,
-                    cancellationToken
-                );
+        userId = GetCurrentUserId();
 
-            return Ok(response);
-        }
-        catch (TaskCanceledException exception)
-            when (!HttpContext.RequestAborted.IsCancellationRequested)
+        if (userId is null)
         {
-            _logger.LogError(
-                exception,
-                "The Python RAG API request timed out."
-            );
-
-            return StatusCode(
-                StatusCodes.Status504GatewayTimeout,
+            return Unauthorized(
                 new
                 {
-                    error = "The RAG service timed out."
+                    error = (
+                        $"The {UserIdHeaderName} header is " +
+                        "required during development."
+                    )
                 }
             );
         }
-        catch (Exception exception)
-            when (
-                exception is HttpRequestException
-                or InvalidOperationException
-            )
-        {
-            _logger.LogError(
-                exception,
-                "The Python RAG API request failed."
-            );
 
-            return StatusCode(
-                StatusCodes.Status502BadGateway,
+        Conversation? conversation =
+            await _conversationRepository
+                .GetConversationAsync(
+                    conversationId,
+                    userId,
+                    cancellationToken
+                );
+
+        if (conversation is null)
+        {
+            return NotFound(
                 new
                 {
-                    error = "The RAG service is unavailable."
+                    error = "Conversation not found."
                 }
             );
         }
     }
+
+    try
+    {
+        /*
+         * Generate the answer first.
+         *
+         * If Python fails, no user or assistant message is
+         * stored in MongoDB.
+         */
+        RagQueryResponse response =
+            await _ragApiClient.QueryAsync(
+                request,
+                cancellationToken
+            );
+
+        /*
+         * Persist both messages only after successful RAG
+         * generation.
+         */
+        if (
+            !string.IsNullOrWhiteSpace(conversationId) &&
+            userId is not null
+        )
+        {
+            DateTime userMessageTime =
+                DateTime.UtcNow;
+
+            var userMessage = new ConversationMessage
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                ConversationId = conversationId,
+                UserId = userId,
+                Role = "user",
+                Content = request.Message.Trim(),
+                CreatedAtUtc = userMessageTime
+            };
+
+            DateTime assistantMessageTime =
+                DateTime.UtcNow;
+
+            var assistantMessage =
+                new ConversationMessage
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    ConversationId = conversationId,
+                    UserId = userId,
+                    Role = "assistant",
+                    Content = response.Answer,
+                    Page = response.Page,
+                    Context = response.Context,
+                    RetrievalContext =
+                        response.RetrievalContext,
+                    CacheHit = response.CacheHit,
+                    Timings = response.Timings,
+                    CreatedAtUtc =
+                        assistantMessageTime
+                };
+
+            await _conversationRepository
+                .AddMessageAsync(
+                    userMessage,
+                    cancellationToken
+                );
+
+            await _conversationRepository
+                .AddMessageAsync(
+                    assistantMessage,
+                    cancellationToken
+                );
+
+            await _conversationRepository
+                .UpdateConversationTimestampAsync(
+                    conversationId,
+                    userId,
+                    assistantMessageTime,
+                    cancellationToken
+                );
+        }
+
+        return Ok(response);
+    }
+    catch (TaskCanceledException exception)
+        when (
+            !HttpContext.RequestAborted
+                .IsCancellationRequested
+        )
+    {
+        _logger.LogError(
+            exception,
+            "The Python RAG API request timed out."
+        );
+
+        return StatusCode(
+            StatusCodes.Status504GatewayTimeout,
+            new
+            {
+                error = "The RAG service timed out."
+            }
+        );
+    }
+    catch (Exception exception)
+        when (
+            exception is HttpRequestException
+            or InvalidOperationException
+        )
+    {
+        _logger.LogError(
+            exception,
+            "The Python RAG API request failed."
+        );
+
+        return StatusCode(
+            StatusCodes.Status502BadGateway,
+            new
+            {
+                error = "The RAG service is unavailable."
+            }
+        );
+    }
+}
 
     // ========================================================
     // SSE streaming query
@@ -110,7 +244,8 @@ public sealed class RagController : ControllerBase
             if (!upstreamResponse.IsSuccessStatusCode)
             {
                 _logger.LogError(
-                    "Python RAG streaming request failed with status {StatusCode}.",
+                    "Python RAG streaming request failed " +
+                    "with status {StatusCode}.",
                     upstreamResponse.StatusCode
                 );
 
@@ -120,7 +255,8 @@ public sealed class RagController : ControllerBase
                 await Response.WriteAsJsonAsync(
                     new
                     {
-                        error = "The RAG service is unavailable."
+                        error =
+                            "The RAG service is unavailable."
                     },
                     cancellationToken
                 );
@@ -128,20 +264,27 @@ public sealed class RagController : ControllerBase
                 return;
             }
 
-            Response.StatusCode = StatusCodes.Status200OK;
-            Response.ContentType = "text/event-stream";
+            Response.StatusCode =
+                StatusCodes.Status200OK;
 
-            Response.Headers["Cache-Control"] = "no-cache";
-            Response.Headers["X-Accel-Buffering"] = "no";
+            Response.ContentType =
+                "text/event-stream";
+
+            Response.Headers["Cache-Control"] =
+                "no-cache";
+
+            Response.Headers["X-Accel-Buffering"] =
+                "no";
 
             await Response.StartAsync(
                 cancellationToken
             );
 
-            await using System.IO.Stream upstreamStream =
-                await upstreamResponse.Content.ReadAsStreamAsync(
-                    cancellationToken
-                );
+            await using Stream upstreamStream =
+                await upstreamResponse.Content
+                    .ReadAsStreamAsync(
+                        cancellationToken
+                    );
 
             byte[] buffer = new byte[8192];
 
@@ -175,7 +318,10 @@ public sealed class RagController : ControllerBase
             }
         }
         catch (OperationCanceledException)
-            when (HttpContext.RequestAborted.IsCancellationRequested)
+            when (
+                HttpContext.RequestAborted
+                    .IsCancellationRequested
+            )
         {
             _logger.LogInformation(
                 "The client disconnected from the RAG stream."
@@ -201,7 +347,10 @@ public sealed class RagController : ControllerBase
                 await Response.WriteAsJsonAsync(
                     new
                     {
-                        error = "The RAG streaming service is unavailable."
+                        error = (
+                            "The RAG streaming service " +
+                            "is unavailable."
+                        )
                     },
                     cancellationToken
                 );
@@ -211,5 +360,22 @@ public sealed class RagController : ControllerBase
         {
             upstreamResponse?.Dispose();
         }
+    }
+
+    // ========================================================
+    // Helpers
+    // ========================================================
+
+    private string? GetCurrentUserId()
+    {
+        string value =
+            Request.Headers[UserIdHeaderName]
+                .FirstOrDefault()
+                ?.Trim()
+            ?? string.Empty;
+
+        return string.IsNullOrWhiteSpace(value)
+            ? null
+            : value;
     }
 }

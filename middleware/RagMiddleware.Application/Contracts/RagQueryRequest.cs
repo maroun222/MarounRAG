@@ -5,6 +5,9 @@ namespace RagMiddleware.Application.Contracts;
 
 public sealed class RagQueryRequest
 {
+    [JsonPropertyName("conversation_id")]
+    public string? ConversationId { get; init; }
+
     [Required]
     [StringLength(
         2000,
