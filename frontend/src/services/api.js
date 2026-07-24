@@ -2,6 +2,10 @@ const API_BASE_URL =
   import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
   "http://127.0.0.1:5050";
 
+const DEV_USER_ID =
+  import.meta.env.VITE_DEV_USER_ID ||
+  "local-dev-user";
+
 
 /**
  * Read an error response without exposing raw backend details.
@@ -160,6 +164,7 @@ function parseSseBlock(block) {
 export async function streamChatMessage(
   message,
   {
+    conversationId,
     onStatus,
     onMetadata,
     onToken,
@@ -184,10 +189,13 @@ export async function streamChatMessage(
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
+          "X-User-Id": DEV_USER_ID,
         },
         body: JSON.stringify({
-          message: normalizedMessage,
-        }),
+  conversation_id:
+    conversationId || null,
+  message: normalizedMessage,
+}),
         signal,
       }
     );
@@ -307,4 +315,7 @@ export async function streamChatMessage(
 }
 
 
-export { API_BASE_URL };
+export {
+  API_BASE_URL,
+  DEV_USER_ID,
+};
