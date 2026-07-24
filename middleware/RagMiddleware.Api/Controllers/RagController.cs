@@ -4,6 +4,9 @@ using RagMiddleware.Application.Abstractions.Persistence;
 using RagMiddleware.Application.Contracts;
 using RagMiddleware.Domain.Entities;
 
+using System.Text;
+using System.Text.Json;
+
 namespace RagMiddleware.Api.Controllers;
 
 [ApiController]
@@ -225,142 +228,583 @@ public async Task<ActionResult<RagQueryResponse>> Query(
     // ========================================================
 
     [HttpPost("query/stream")]
-    [Produces("text/event-stream")]
-    public async Task StreamQuery(
-        [FromBody] RagQueryRequest request,
-        CancellationToken cancellationToken
-    )
+[Produces("text/event-stream")]
+public async Task StreamQuery(
+    [FromBody] RagQueryRequest request,
+    CancellationToken cancellationToken
+)
+{
+    HttpResponseMessage? upstreamResponse = null;
+
+    string? userId = null;
+
+    string? conversationId =
+        request.ConversationId?.Trim();
+
+    /*
+     * Validate the conversation before starting the stream.
+     * Do not save messages until a complete answer is received.
+     */
+    if (!string.IsNullOrWhiteSpace(conversationId))
     {
-        HttpResponseMessage? upstreamResponse = null;
+        userId = GetCurrentUserId();
 
-        try
+        if (userId is null)
         {
-            upstreamResponse =
-                await _ragApiClient.StreamQueryAsync(
-                    request,
-                    cancellationToken
-                );
-
-            if (!upstreamResponse.IsSuccessStatusCode)
-            {
-                _logger.LogError(
-                    "Python RAG streaming request failed " +
-                    "with status {StatusCode}.",
-                    upstreamResponse.StatusCode
-                );
-
-                Response.StatusCode =
-                    StatusCodes.Status502BadGateway;
-
-                await Response.WriteAsJsonAsync(
-                    new
-                    {
-                        error =
-                            "The RAG service is unavailable."
-                    },
-                    cancellationToken
-                );
-
-                return;
-            }
-
             Response.StatusCode =
-                StatusCodes.Status200OK;
+                StatusCodes.Status401Unauthorized;
 
-            Response.ContentType =
-                "text/event-stream";
-
-            Response.Headers["Cache-Control"] =
-                "no-cache";
-
-            Response.Headers["X-Accel-Buffering"] =
-                "no";
-
-            await Response.StartAsync(
+            await Response.WriteAsJsonAsync(
+                new
+                {
+                    error = (
+                        $"The {UserIdHeaderName} header is " +
+                        "required during development."
+                    )
+                },
                 cancellationToken
             );
 
-            await using Stream upstreamStream =
-                await upstreamResponse.Content
-                    .ReadAsStreamAsync(
-                        cancellationToken
-                    );
+            return;
+        }
 
-            byte[] buffer = new byte[8192];
-
-            while (true)
-            {
-                int bytesRead =
-                    await upstreamStream.ReadAsync(
-                        buffer.AsMemory(
-                            0,
-                            buffer.Length
-                        ),
-                        cancellationToken
-                    );
-
-                if (bytesRead == 0)
-                {
-                    break;
-                }
-
-                await Response.Body.WriteAsync(
-                    buffer.AsMemory(
-                        0,
-                        bytesRead
-                    ),
+        Conversation? conversation =
+            await _conversationRepository
+                .GetConversationAsync(
+                    conversationId,
+                    userId,
                     cancellationToken
                 );
+
+        if (conversation is null)
+        {
+            Response.StatusCode =
+                StatusCodes.Status404NotFound;
+
+            await Response.WriteAsJsonAsync(
+                new
+                {
+                    error = "Conversation not found."
+                },
+                cancellationToken
+            );
+
+            return;
+        }
+    }
+
+    var streamCapture = new RagStreamCapture();
+
+    try
+    {
+        upstreamResponse =
+            await _ragApiClient.StreamQueryAsync(
+                request,
+                cancellationToken
+            );
+
+        if (!upstreamResponse.IsSuccessStatusCode)
+        {
+            _logger.LogError(
+                "Python RAG streaming request failed " +
+                "with status {StatusCode}.",
+                upstreamResponse.StatusCode
+            );
+
+            Response.StatusCode =
+                StatusCodes.Status502BadGateway;
+
+            await Response.WriteAsJsonAsync(
+                new
+                {
+                    error =
+                        "The RAG service is unavailable."
+                },
+                cancellationToken
+            );
+
+            return;
+        }
+
+        Response.StatusCode =
+            StatusCodes.Status200OK;
+
+        Response.ContentType =
+            "text/event-stream";
+
+        Response.Headers["Cache-Control"] =
+            "no-cache";
+
+        Response.Headers["X-Accel-Buffering"] =
+            "no";
+
+        await Response.StartAsync(
+            cancellationToken
+        );
+
+        await using Stream upstreamStream =
+            await upstreamResponse.Content
+                .ReadAsStreamAsync(
+                    cancellationToken
+                );
+
+        using var reader =
+            new StreamReader(upstreamStream);
+
+        string currentEvent = "message";
+
+        List<string> dataLines = [];
+
+        while (true)
+        {
+            string? line =
+                await reader.ReadLineAsync(
+                    cancellationToken
+                );
+
+            if (line is null)
+            {
+                /*
+                 * Process a final event even if the upstream
+                 * stream did not end with a blank line.
+                 */
+                if (dataLines.Count > 0)
+                {
+                    streamCapture.ProcessEvent(
+                        currentEvent,
+                        string.Join(
+                            "\n",
+                            dataLines
+                        )
+                    );
+                }
+
+                break;
+            }
+
+            /*
+             * Forward every SSE line to React.
+             */
+            await Response.WriteAsync(
+                line + "\n",
+                cancellationToken
+            );
+
+            /*
+             * A blank line marks the end of one SSE event.
+             */
+            if (line.Length == 0)
+            {
+                if (dataLines.Count > 0)
+                {
+                    streamCapture.ProcessEvent(
+                        currentEvent,
+                        string.Join(
+                            "\n",
+                            dataLines
+                        )
+                    );
+                }
+
+                currentEvent = "message";
+                dataLines.Clear();
 
                 await Response.Body.FlushAsync(
                     cancellationToken
                 );
+
+                continue;
             }
-        }
-        catch (OperationCanceledException)
-            when (
-                HttpContext.RequestAborted
-                    .IsCancellationRequested
-            )
-        {
-            _logger.LogInformation(
-                "The client disconnected from the RAG stream."
-            );
-        }
-        catch (Exception exception)
-            when (
-                exception is HttpRequestException
-                or InvalidOperationException
-                or TaskCanceledException
-            )
-        {
-            _logger.LogError(
-                exception,
-                "The Python RAG streaming request failed."
-            );
 
-            if (!Response.HasStarted)
+            if (
+                line.StartsWith(
+                    "event:",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
             {
-                Response.StatusCode =
-                    StatusCodes.Status502BadGateway;
+                currentEvent =
+                    line["event:".Length..].Trim();
 
-                await Response.WriteAsJsonAsync(
-                    new
-                    {
-                        error = (
-                            "The RAG streaming service " +
-                            "is unavailable."
-                        )
-                    },
-                    cancellationToken
+                continue;
+            }
+
+            if (
+                line.StartsWith(
+                    "data:",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            {
+                dataLines.Add(
+                    line["data:".Length..]
+                        .TrimStart()
                 );
             }
         }
-        finally
+
+        /*
+         * Persist only a fully completed answer.
+         *
+         * Failed or interrupted streams do not create partial
+         * conversation messages.
+         */
+        if (
+            streamCapture.Completed &&
+            streamCapture.Answer.Length > 0 &&
+            !string.IsNullOrWhiteSpace(
+                conversationId
+            ) &&
+            userId is not null
+        )
         {
-            upstreamResponse?.Dispose();
+            DateTime userMessageTime =
+                DateTime.UtcNow;
+
+            DateTime assistantMessageTime =
+                userMessageTime.AddMilliseconds(1);
+
+            var userMessage = new ConversationMessage
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                ConversationId = conversationId,
+                UserId = userId,
+                Role = "user",
+                Content = request.Message.Trim(),
+                CreatedAtUtc = userMessageTime
+            };
+
+            var assistantMessage =
+                new ConversationMessage
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    ConversationId = conversationId,
+                    UserId = userId,
+                    Role = "assistant",
+                    Content =
+                        streamCapture.Answer.ToString(),
+                    Page = streamCapture.Page,
+                    Context = streamCapture.Context,
+                    RetrievalContext =
+                        streamCapture.RetrievalContext,
+                    CacheHit = streamCapture.CacheHit,
+                    Timings = streamCapture.Timings,
+                    CreatedAtUtc =
+                        assistantMessageTime
+                };
+
+            await _conversationRepository
+                .AddMessageAsync(
+                    userMessage,
+                    cancellationToken
+                );
+
+            await _conversationRepository
+                .AddMessageAsync(
+                    assistantMessage,
+                    cancellationToken
+                );
+
+            await _conversationRepository
+                .UpdateConversationTimestampAsync(
+                    conversationId,
+                    userId,
+                    assistantMessageTime,
+                    cancellationToken
+                );
         }
     }
+    catch (OperationCanceledException)
+        when (
+            HttpContext.RequestAborted
+                .IsCancellationRequested
+        )
+    {
+        /*
+         * Do not save partial messages when the browser
+         * disconnects before the stream finishes.
+         */
+        _logger.LogInformation(
+            "The client disconnected from the RAG stream."
+        );
+    }
+    catch (Exception exception)
+        when (
+            exception is HttpRequestException
+            or InvalidOperationException
+            or TaskCanceledException
+            or JsonException
+        )
+    {
+        _logger.LogError(
+            exception,
+            "The Python RAG streaming request failed."
+        );
+
+        if (!Response.HasStarted)
+        {
+            Response.StatusCode =
+                StatusCodes.Status502BadGateway;
+
+            await Response.WriteAsJsonAsync(
+                new
+                {
+                    error = (
+                        "The RAG streaming service " +
+                        "is unavailable."
+                    )
+                },
+                cancellationToken
+            );
+        }
+        else
+        {
+            string errorPayload =
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        message = (
+                            "The RAG stream was interrupted."
+                        )
+                    }
+                );
+
+            await Response.WriteAsync(
+                $"event: error\n" +
+                $"data: {errorPayload}\n\n",
+                cancellationToken
+            );
+
+            await Response.Body.FlushAsync(
+                cancellationToken
+            );
+        }
+    }
+    finally
+    {
+        upstreamResponse?.Dispose();
+    }
+}
+
+private sealed class RagStreamCapture
+{
+    public StringBuilder Answer { get; } = new();
+
+    public int? Page { get; private set; }
+
+    public string? Context { get; private set; }
+
+    public List<string> RetrievalContext {
+        get;
+    } = [];
+
+    public bool? CacheHit { get; private set; }
+
+    public Dictionary<string, double> Timings {
+        get;
+    } = [];
+
+    public bool Completed { get; private set; }
+
+    public void ProcessEvent(
+        string eventName,
+        string rawData
+    )
+    {
+        if (string.IsNullOrWhiteSpace(rawData))
+        {
+            return;
+        }
+
+        using JsonDocument document =
+            JsonDocument.Parse(rawData);
+
+        JsonElement root =
+            document.RootElement;
+
+        if (
+            eventName.Equals(
+                "token",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            if (
+                root.TryGetProperty(
+                    "text",
+                    out JsonElement textElement
+                ) &&
+                textElement.ValueKind ==
+                    JsonValueKind.String
+            )
+            {
+                Answer.Append(
+                    textElement.GetString()
+                );
+            }
+
+            return;
+        }
+
+        if (
+            eventName.Equals(
+                "done",
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            Completed = true;
+
+            /*
+             * Support a future backend that may include the
+             * complete answer in the done event.
+             */
+            if (
+                Answer.Length == 0 &&
+                root.TryGetProperty(
+                    "answer",
+                    out JsonElement answerElement
+                ) &&
+                answerElement.ValueKind ==
+                    JsonValueKind.String
+            )
+            {
+                Answer.Append(
+                    answerElement.GetString()
+                );
+            }
+        }
+
+        CaptureMetadata(root);
+    }
+
+    private void CaptureMetadata(
+        JsonElement element
+    )
+    {
+        if (
+            element.ValueKind !=
+            JsonValueKind.Object
+        )
+        {
+            return;
+        }
+
+        if (
+            element.TryGetProperty(
+                "metadata",
+                out JsonElement metadataElement
+            )
+        )
+        {
+            CaptureMetadata(metadataElement);
+        }
+
+        if (
+            element.TryGetProperty(
+                "page",
+                out JsonElement pageElement
+            ) &&
+            pageElement.ValueKind ==
+                JsonValueKind.Number &&
+            pageElement.TryGetInt32(
+                out int parsedPage
+            )
+        )
+        {
+            Page = parsedPage;
+        }
+
+        if (
+            element.TryGetProperty(
+                "context",
+                out JsonElement contextElement
+            ) &&
+            contextElement.ValueKind ==
+                JsonValueKind.String
+        )
+        {
+            Context =
+                contextElement.GetString();
+        }
+
+        if (
+            element.TryGetProperty(
+                "retrieval_context",
+                out JsonElement retrievalElement
+            ) &&
+            retrievalElement.ValueKind ==
+                JsonValueKind.Array
+        )
+        {
+            RetrievalContext.Clear();
+
+            foreach (
+                JsonElement item
+                in retrievalElement.EnumerateArray()
+            )
+            {
+                if (
+                    item.ValueKind ==
+                    JsonValueKind.String
+                )
+                {
+                    RetrievalContext.Add(
+                        item.GetString() ??
+                        string.Empty
+                    );
+                }
+            }
+        }
+
+        if (
+            element.TryGetProperty(
+                "cache_hit",
+                out JsonElement cacheElement
+            ) &&
+            (
+                cacheElement.ValueKind ==
+                    JsonValueKind.True ||
+                cacheElement.ValueKind ==
+                    JsonValueKind.False
+            )
+        )
+        {
+            CacheHit =
+                cacheElement.GetBoolean();
+        }
+
+        if (
+            element.TryGetProperty(
+                "timings",
+                out JsonElement timingsElement
+            ) &&
+            timingsElement.ValueKind ==
+                JsonValueKind.Object
+        )
+        {
+            Timings.Clear();
+
+            foreach (
+                JsonProperty property
+                in timingsElement.EnumerateObject()
+            )
+            {
+                if (
+                    property.Value.ValueKind ==
+                        JsonValueKind.Number &&
+                    property.Value.TryGetDouble(
+                        out double value
+                    )
+                )
+                {
+                    Timings[property.Name] =
+                        value;
+                }
+            }
+        }
+    }
+}
 
     // ========================================================
     // Helpers
